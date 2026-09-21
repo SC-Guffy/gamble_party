@@ -165,11 +165,14 @@
   .spot.miss{opacity:.38}
   @keyframes spot-pop{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
   #bj-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-  #bj-actions button{font-family:var(--font-display);font-size:13px;border:none;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
-  #bj-actions button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
-  #bj-actions button:disabled{opacity:.35;cursor:not-allowed}
+  #pg-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  #btn-go{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stop{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
+  #pg-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  :is(#bj-actions,#pg-actions) button{font-family:var(--font-display);font-size:13px;border:none;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
+  :is(#bj-actions,#pg-actions) button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
+  :is(#bj-actions,#pg-actions) button:disabled{opacity:.35;cursor:not-allowed}
   #btn-hit{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stand{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important} #btn-double{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
-  #bj-actions button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
+  :is(#bj-actions,#pg-actions) button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
   #bj-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
   #night-title,#final-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
@@ -181,6 +184,53 @@
   #toast{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:10;background:#161320;border:2px solid var(--gold);color:var(--ink);border-radius:999px;padding:10px 18px;font-weight:600;font-size:14px;max-width:90vw;pointer-events:none;transition:opacity .25s ease}
   #toast.err{border-color:var(--bad)}
   #toast.off{opacity:0}
+
+  /* 게임 투표: 어두운 남색 벌집 배경 + 세로 카드 3장 + 무작위 바 */
+  #screen-vote{justify-content:flex-start;gap:12px;padding:18px 16px 24px;
+    background:radial-gradient(ellipse at 50% -25%,#2c6fb3 0%,transparent 62%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50L0 16L28 0L56 16L56 50L28 66L28 100M28 0L28 34L0 50L0 84L28 100L56 84L56 50L28 34' fill='none' stroke='%2378b4ff' stroke-opacity='.07' stroke-width='1.5'/%3E%3C/svg%3E"),
+      linear-gradient(#0d2447,#061226)}
+  #vote-day{position:absolute;top:14px;left:22px;font:italic 800 clamp(30px,5vw,52px)/1 var(--font-body);color:rgba(255,255,255,.92);letter-spacing:-.01em}
+  #vote-players{position:absolute;left:22px;top:92px;display:flex;flex-direction:column;gap:8px;text-align:left}
+  .vp{display:flex;align-items:center;gap:8px;min-width:130px;padding:6px 10px;font-weight:700;font-size:14px;color:#8fe6ff;border-left:3px solid rgba(143,230,255,.5);background:linear-gradient(90deg,rgba(65,217,255,.14),transparent)}
+  .vp.empty{color:rgba(255,255,255,.22);border-left-color:rgba(255,255,255,.12);background:none}
+  .vp img{width:16px;height:22px;image-rendering:pixelated}
+  .vp .ok{color:var(--good)}
+  .vp .mk{font-size:13px}
+  #vote-main{margin-block:auto;width:100%;max-width:680px;display:flex;flex-direction:column;align-items:center;gap:10px}
+  #vote-title{margin:0;font:italic 800 clamp(22px,4.4vw,34px)/1.2 var(--font-body);color:#fff;text-shadow:0 2px 14px rgba(80,180,255,.55)}
+  #vote-timer{display:inline-block;min-width:1.3em;margin-left:.3em;text-align:left;color:var(--gold)}
+  #vote-sub{margin:0 0 6px;font-size:13px;color:#b9d4f2}
+  #vote-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(8px,2.6vw,26px);width:100%}
+  .vote-opt{cursor:pointer;border:2px solid rgba(150,205,255,.45);background:#0b1e3c;transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,opacity .3s ease}
+  .vote-opt:hover{border-color:rgba(210,238,255,.9)}
+  .vote-opt.mine{border-color:#fff;box-shadow:0 0 0 2px rgba(65,217,255,.7),0 0 24px rgba(65,217,255,.55)}
+  .vote-opt.hl{border-color:var(--gold);box-shadow:0 0 0 3px var(--gold),0 0 30px rgba(255,221,122,.75)}
+  #vote-main.done .vote-opt:not(.hl){opacity:.35}
+  #vote-main.done .vote-opt.hl{animation:spot-pop .5s ease}
+  #vote-main.done #vote-sub{font-size:17px;font-weight:800;color:var(--gold)}
+  .vcard{position:relative;aspect-ratio:3/4.4;border-radius:14px;overflow:hidden;padding:0 4px 10px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:2px}
+  .vcard.mine{transform:translateY(-6px)}
+  .vcard canvas{position:absolute;inset:0;width:100%;height:100%}
+  .vcard::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,transparent 36%,rgba(6,18,38,.82) 58%,#061226 100%)}
+  .vcard > :not(canvas){position:relative;z-index:1}
+  .vicon{flex:none;width:46px;height:46px;border-radius:50%;background:rgba(8,18,38,.88);border:2px solid #fff;display:grid;place-items:center;font-size:22px;margin-bottom:6px}
+  .vcard b{font-size:clamp(14px,2.6vw,19px);font-weight:800}
+  .vcard small{font-size:11px;color:#9fc0e4;line-height:1.3}
+  /* 게이지 한 칸 = 플레이어 한 명. 찍은 사람 칸은 그 사람 색 + 마크(●■▲◆) */
+  .vbar{display:flex;gap:4px;justify-content:center;width:80%;margin-top:8px}
+  .vbar i{flex:1;max-width:44px;height:16px;border-radius:2px;background:rgba(255,255,255,.12);transform:skewX(-20deg);display:grid;place-items:center;font-style:normal;font-size:10px;line-height:1;color:#0b1020}
+  .vbar i span{transform:skewX(20deg)}
+  .vcnt{font-size:11px;color:#cfe3f7;font-variant-numeric:tabular-nums;white-space:nowrap}
+  #vote-random{width:100%;max-width:560px;box-sizing:border-box;display:flex;align-items:center;gap:12px;margin-top:10px;padding:6px 18px 6px 6px;border-radius:999px;background:rgba(8,20,42,.8)}
+  #vote-random .vicon{width:36px;height:36px;font-size:17px;margin:0}
+  #vote-random b{flex:none;font-size:15px}
+  #vote-random .vbar{flex:1;margin:0}
+  #vote-ready{margin-top:8px;min-width:180px;padding:12px 30px;font-weight:800;font-size:16px;color:#fff;background:rgba(20,44,78,.85);border:2px solid rgba(150,205,255,.45);border-radius:6px;cursor:pointer}
+  #vote-ready.on{background:#1d8f5a;border-color:var(--good)}
+  #vote-ready:disabled{opacity:.45;cursor:not-allowed}
+  @media (max-width:1320px){ #vote-day,#vote-players{position:static} #vote-players{flex-direction:row;flex-wrap:wrap;justify-content:center} .vp{min-width:0} }
+  @media (max-width:719px){ .vcard small{display:none} .vicon{width:34px;height:34px;font-size:17px;margin-bottom:3px} .vbar{width:88%} #vote-random{gap:8px;padding-right:12px} #vote-random b{font-size:13px} }
 
   @media (prefers-reduced-motion: reduce){ .beg,#btn-beg{animation:none} button.btn{transition:none} }
 </style>
@@ -219,6 +269,18 @@
     </div>
   </section>
 
+  <section id="screen-vote" class="screen" hidden>
+    <div id="vote-day"></div>
+    <div id="vote-players"></div>
+    <div id="vote-main">
+      <h2 id="vote-title">게임 선택<span id="vote-timer"></span></h2>
+      <p id="vote-sub"></p>
+      <div id="vote-cards"></div>
+      <button class="vote-opt" id="vote-random" data-i="3"><span class="vicon">?</span><b>무작위 게임</b><span class="vbar"></span><span class="vcnt"></span></button>
+      <button id="vote-ready">준비</button>
+    </div>
+  </section>
+
   <section id="screen-game" class="screen" hidden>
     <div id="hud"><span id="hud-round"></span><div id="hud-players" style="display:flex;gap:6px"></div></div>
     <div id="track-wrap"><canvas id="canvas"></canvas><div id="overlay"></div></div>
@@ -245,6 +307,13 @@
           <button id="btn-hit">HIT<small>한 장 더 (H)</small></button>
           <button id="btn-stand">STAND<small>여기서 멈춤 (S)</small></button>
           <button id="btn-double">DOUBLE<small>판돈 2배 + 딱 한 장 (D)</small></button>
+        </div>
+      </div>
+      <div id="panel-pg" hidden>
+        <div id="pg-hint"></div>
+        <div id="pg-actions">
+          <button id="btn-go">더 갈래! 🐧<small></small></button>
+          <button id="btn-stop">멈출래 ✋<small></small></button>
         </div>
       </div>
       <div id="panel-race" hidden><div class="rows" id="race-rows"></div></div>
@@ -599,8 +668,8 @@
   }
 
   // ---------- dom ----------
-  const screens = { home:$("screen-home"), lobby:$("screen-lobby"), game:$("screen-game") };
-  function show(name){ for(const k in screens) screens[k].hidden = (k!==name); $("home-bg").hidden = (name === "game"); }
+  const screens = { home:$("screen-home"), lobby:$("screen-lobby"), vote:$("screen-vote"), game:$("screen-game") };
+  function show(name){ for(const k in screens) screens[k].hidden = (k!==name); $("home-bg").hidden = (name === "game" || name === "vote"); }
   const connBanner = $("conn-banner"), nickInput = $("nickname"), roomList = $("room-list");
   const btnCreate = $("btn-create"), btnReady = $("btn-ready");
   const canvas = $("canvas"), trackWrap = $("track-wrap"), ctx = canvas.getContext("2d"), overlay = $("overlay");
@@ -697,10 +766,11 @@
     room = r;
     setInRoom(true);
     if(r.phase === "lobby"){ show("lobby"); renderLobby(); return; }
+    if(r.phase === "vote"){ if(prev !== "vote"){ show("vote"); buildVote(); } renderVote(); return; }
     if(screens.game.hidden){ show("game"); resizeCanvas(); }
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
-    const bj = r.game === "blackjack", dice = r.game === "dice";
+    const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
@@ -708,6 +778,7 @@
       setOverlay("");
       if(r.entrants){ clocks = r.entrants.map(() => Math.random()); buildCards(); }
       if(dice){ diceSnap = {}; buildDiceBoard(); }
+      pgVis = {};
     }
     if(dice && !$("dice-board").children.length) buildDiceBoard(); // 도중 입장
     if(r.entrants && clocks.length !== r.entrants.length) clocks = r.entrants.map(() => Math.random());
@@ -716,13 +787,14 @@
     $("bet-actions").hidden = dice && r.phase !== "betting";
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice;
-    $("panel-bj").hidden = r.phase !== "playing";
+    $("cards").hidden = bj || dice || pg;
+    $("panel-bj").hidden = r.phase !== "playing" || !bj;
+    $("panel-pg").hidden = r.phase !== "playing" || !pg;
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && r.entrants) renderBet();
+    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -779,7 +851,7 @@
     $("lobby-players").innerHTML = html;
   }
   function renderHud(){
-    $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : " 경마");
+    $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -811,6 +883,36 @@
       selected < 0 ? "동물을 고른 뒤 칩을 눌러 베팅하세요." + capTxt :
       INFO[room.entrants[selected].key].name + " · 적중하면 x" + room.entrants[selected].odds.toFixed(1) + capTxt;
   }
+
+  // 펭귄 빙산 건너기: 베팅은 블랙잭처럼 칩/준비 버튼, 진행 중엔 "더 갈래 / 멈출래"
+  let pgVis = {}, pgBusyUntil = 0; // pgVis = 펭귄별 화면상 위치/연출 상태, pgBusyUntil = 내 점프 연출이 끝나는 시각(그 전엔 결과를 말해주지 않는다)
+  const pct = (v) => Math.round(v*100)+"%";
+  function renderPg(){
+    const my = me(), G = room.pg, bet = my.bets[0] || 0, betting = room.phase === "betting";
+    document.querySelectorAll(".chip").forEach((c) => { c.disabled = !betting || my.ready || my.mining; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : bet ? "출발 준비 완료" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🐧 " + G.round + "/" + G.rounds + "번째 판 · 내 베팅 $" + bet + " · 빙산을 건널수록 배당이 커져요, 완주하면 x" + G.mults[G.mults.length-1] + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
+    const st = my.pg, busy = performance.now() < pgBusyUntil, can = room.phase === "playing" && st && st.state === "playing" && !busy;
+    const step = st ? st.step : 0, cur = step ? G.mults[step-1] : 1;
+    $("btn-go").disabled = !can; $("btn-stop").disabled = !can || step < 1;
+    $("btn-go").querySelector("small").textContent = can ? "성공률 " + pct(G.probs[step]) + " → x" + G.mults[step] + (step === G.probs.length-1 ? " (완주!)" : "") : "";
+    $("btn-stop").querySelector("small").textContent = !can ? "" : step < 1 ? "한 번은 뛰어야 해요" : "x" + cur + " = $" + Math.floor(bet*cur) + " 챙기기";
+    $("pg-hint").textContent = busy ? "폴짝…!" : can ? (step ? step + "칸 성공! 지금 멈추면 $" + Math.floor(bet*cur) + " · 더 가면 성공률 " + pct(G.probs[step]) : "첫 점프! 성공률 " + pct(G.probs[0])) :
+      !st || st.state === "out" ? "이번 판은 구경 중" : st.state === "fell" ? "풍덩… 🌊" : st.state === "goal" ? "완주!! 🏝️" : st.state === "stopped" ? "$" + Math.floor(bet*cur) + " 챙겼어요. 다른 펭귄들을 구경하세요" : "";
+  }
+  const pgAct = (a) => { ensureAudio(); sendMsg({type:"pg", a:a}); if(a === "go"){ pgBusyUntil = performance.now()+850; setTimeout(renderPg, 870); } renderPg(); };
+  $("btn-go").addEventListener("click", () => pgAct("go"));
+  $("btn-stop").addEventListener("click", () => pgAct("stop"));
+  window.addEventListener("keydown", (e) => { // G/스페이스 = 더 갈래, S = 멈출래 (채팅 입력 중엔 무시)
+    if(!room || !room.pg || room.phase !== "playing" || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const b = {g:"btn-go", " ":"btn-go", s:"btn-stop"}[e.key.toLowerCase()];
+    if(b && !$(b).disabled){ e.preventDefault(); $(b).click(); }
+  });
 
   // 주사위: 베팅 칸 인덱스는 서버 DICE_BETS 순서와 같아야 한다 (0 홀, 1 짝, 2 다운, 3 업, 4 더블, 5~15 = 합 2~12)
   const DICE_LABELS = [["홀","합이 홀수"],["짝","합이 짝수"],["다운","합 2~6"],["업","합 8~12"],["더블","두 눈이 같음"]]
@@ -882,7 +984,18 @@
   const BJ_OUT = {blackjack:"🃏 블랙잭!", win:"승", push:"푸시", lose:"패", bust:"버스트"};
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
-    $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.pg){
+      $("result-title").textContent = "🐧 빙산 건너기 결과";
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, st = p.pg || {};
+        const tag = st.state === "fell" ? "🌊 풍덩 ("+st.step+"칸에서)" : st.state === "goal" ? "🏝️ 완주! x"+room.pg.mults[st.step-1] : "✋ "+st.step+"칸 x"+room.pg.mults[st.step-1];
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(mine.win > mine.bet*4 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
     if(room.dice){
       const a = res.roll[0], b = res.roll[1], t = a+b;
       $("result-title").textContent = "🎲 " + a + " + " + b + " = " + t + " · " + (t%2 ? "홀" : "짝") + " · " + (t === 7 ? "세븐! (업·다운 꽝)" : t > 7 ? "업" : "다운") + (a === b ? " · 더블!" : "");
@@ -1083,11 +1196,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1448,6 +1561,86 @@
     });
   }
 
+  // ---------- 펭귄 빙산 건너기 장면 ----------
+  // 레인마다: 출발 빙산(0) → 얼음 조각(1~9, 갈수록 작아진다) → 도착 섬(10). 서버 결과는 바로 오지만 점프 연출(0.6초)이 끝난 뒤에 보여준다.
+  function drawPenguinGame(ts, dt){
+    const g = ctx, now = ts/1000, G = room.pg, N = G.probs.length, n = room.players.length, res = room.phase === "result" && room.result;
+    const topH = Math.max(40, H*0.2);
+    const sky = g.createLinearGradient(0,0,0,topH); sky.addColorStop(0,"#1b2a5e"); sky.addColorStop(1,"#7fc4e8");
+    g.fillStyle = sky; g.fillRect(0,0,W,topH+2);
+    for(let k=0;k<3;k++){ // 오로라
+      g.strokeStyle = ["rgba(123,216,143,.35)","rgba(94,200,248,.3)","rgba(205,139,240,.25)"][k]; g.lineWidth = topH*0.16; g.beginPath();
+      for(let x=0;x<=W+20;x+=20){ const y = topH*(0.3+0.16*k)+S(x*0.012+now*0.6+k*2)*topH*0.12; if(x) g.lineTo(x,y); else g.moveTo(x,y); }
+      g.stroke();
+    }
+    g.fillStyle = "#e8f4fb"; for(let k=0;k<6;k++){ const mx = W*(k/5), mh = topH*(0.35+0.25*((k*37)%5)/5); g.beginPath(); g.moveTo(mx-mh*1.3, topH+1); g.lineTo(mx, topH-mh); g.lineTo(mx+mh*1.3, topH+1); g.fill(); } // 먼 설산
+    const laneH = (H-topH)/n, u = clamp(laneH/15, 1.4, 4.4), len = LEN.penguin;
+    const X = (i) => W*0.07+(W*0.86)*i/N;
+
+    room.players.forEach((p, li) => {
+      const y0 = topH+li*laneH, sea = y0+laneH*0.72, st = p.pg, bet = p.bets[0] || (res && res.payouts[p.id] ? res.payouts[p.id].bet : 0);
+      g.fillStyle = li%2 ? "#1d5f8f" : "#1a5684"; g.fillRect(0, y0, W, laneH);
+      g.fillStyle = "rgba(255,255,255,.12)"; for(let x=-40; x<W; x+=46) g.fillRect(x+((now*14+li*20)%46), sea+laneH*0.12+S(x+now*2)*2, 22, 2); // 물결
+      // 얼음들: 출발 빙산은 크고, 조각은 갈수록 작고, 섬에는 깃발
+      const v = pgVis[p.id] || (pgVis[p.id] = {pos: st ? st.step : 0, anim:null, fell:false, sinkAt:0, clock:R()});
+      for(let i=0;i<=N;i++){
+        const broken = v.sinkAt && i === v.pos+1, since = now-v.sinkAt;
+        if(broken && since > 1.2) continue;
+        const fw = i === 0 || i === N ? 13 : 9.5-i*0.45, bob = i === 0 || i === N ? 0 : S(now*1.6+i*1.3+li)*1.5;
+        g.save(); g.translate(X(i)-(fw/2+1)*u, sea+bob+(broken ? since*since*40 : 0)); if(broken) g.rotate(since*0.5); g.scale(u,u);
+        drawBox(g, 0, -1.2, 0, fw, i === 0 || i === N ? 3.2 : 2.2, 5, i === N ? "#f4fbff" : "#cfeaf7");
+        if(i === N){ drawBox(g, fw-3, 2, 2, 0.6, 7, 0.6, "#7a4f2a"); drawBox(g, fw-2.4, 6, 2, 3.4, 2.6, 0.4, "#e8443a"); }
+        g.restore();
+      }
+      if(!st || st.state === "out"){ // 구경꾼: 이름표만
+        g.font = "700 11px Rubik, sans-serif"; g.textAlign = "left"; g.textBaseline = "middle"; g.fillStyle = "rgba(11,10,19,.6)"; g.fillRect(4, y0+4, g.measureText(p.name+" 구경 중").width+12, 16); g.fillStyle = PCOL[p.color]; g.fillText(p.name+" 구경 중", 10, y0+12.5);
+        return;
+      }
+      // 서버 상태 → 연출 시작
+      if(!v.anim && !v.sinkAt){
+        if(st.step > v.pos){ v.anim = {from:v.pos, to:v.pos+1, t0:now, fail:false}; tone(520,0.12,"sine",0.06,880); }
+        else if(st.state === "fell" && !v.fell){ v.fell = true; v.anim = {from:v.pos, to:v.pos+1, t0:now, fail:true}; tone(520,0.12,"sine",0.06,880); }
+      }
+      let px = X(v.pos), lift = 0, ang = 0, vv = 0;
+      if(v.anim){
+        const f = clamp((now-v.anim.t0)/0.6, 0, 1);
+        px = X(v.anim.from)+(X(v.anim.to)-X(v.anim.from))*f; lift = S(f*PI)*laneH*0.38; ang = -0.25*Math.cos(f*PI); vv = 0.6;
+        if(f >= 1){
+          if(v.anim.fail){ // 얼음이 깨지며 풍덩
+            v.sinkAt = now; tone(160,0.5,"sine",0.18,50); if(actx) drum(actx.currentTime, 0.25, 0.1, 600);
+            burst(26, null, sea, (dx,dy) => ({x:X(v.anim.to), color:R()<0.5?"#dff6ff":"#7fd0ff", vx:dx*150, vy:-Math.abs(dy)*260-60, g:620, life:0.9, w:3+R()*4, spin:5}));
+          } else { v.pos = v.anim.to; tone(300,0.08,"triangle",0.08,200); if(v.pos === N){ sfxSparkle(); fireworks(); } }
+          v.anim = null;
+        }
+      }
+      const sunk = v.sinkAt ? now-v.sinkAt : 0;
+      if(v.sinkAt){ px = X(v.pos+1); lift = -sunk*sunk*90; ang = sunk*5; }
+      const dance = !v.anim && (st.state === "stopped" || st.state === "goal") && v.pos === st.step ? Math.abs(S(now*7+li))*laneH*0.12 : 0;
+      v.clock += dt*2.6*(vv || (dance ? 0.5 : 0));
+      if(!v.sinkAt || sunk < 0.42){ // 펭귄 + 플레이어 색 목도리 (빠지면 물속으로 사라진다 — 아래 레인까지 비치지 않게 금방 숨김)
+        const floeBob = v.anim || v.pos === 0 || v.pos === N ? 0 : S(now*1.6+v.pos*1.3+li)*1.5;
+        g.save(); g.translate(px, sea-1.2*u+floeBob-lift-dance); g.rotate(ang);
+        drawAnimal(g, "penguin", -len*u/2, 0, u, v.clock, vv ? 0.4 : dance ? 0.3 : 0, 0, {f:0, v:0.4, now:now});
+        g.fillStyle = PCOL[p.color]; g.fillRect(-len*u/2+0.8*u, -11.4*u, 7*u, 1.3*u); g.fillRect(-len*u/2+0.8*u, -11.4*u, 1.4*u, 3.6*u);
+        g.restore();
+      }
+      if(v.sinkAt && sunk > 0.3 && sunk < 2.2 && R() < dt*10) emit(null, sea, {x:px+(R()-0.5)*10, color:"rgba(255,255,255,.8)", vy:-25, life:0.6, w:3+R()*3, ring:0}); // 뽀글뽀글
+      // 머리 위: 다음 점프 성공률 (연출 중엔 숨김) / 결과
+      const headY = sea-21*u-lift-dance, shown = v.pos, playing = st.state === "playing" && !v.anim && !v.sinkAt && shown === st.step;
+      if(playing){
+        const pr = G.probs[shown];
+        pill(g, px, headY+S(now*4+li)*1.5, pct(pr), pr >= 0.75 ? "#7bd88f" : pr >= 0.6 ? "#ffdd7a" : "#ff5d72", "#161320", clamp(u*4.6, 11, 16));
+      } else if(v.sinkAt) pill(g, px, sea-6*u, "풍덩! −$"+bet, "#ff5d72", "#fff", clamp(u*4.2, 10, 14));
+      else if(!v.anim && st.state === "stopped") pill(g, px, headY, "✋ +$"+(Math.floor(bet*G.mults[st.step-1])-bet), "#ffdd7a", "#161320", clamp(u*4.2, 10, 14));
+      else if(!v.anim && st.state === "goal" && shown === N) pill(g, px-6*u, headY, "🏝️ 완주! +$"+(Math.floor(bet*G.mults[N-1])-bet), "#ffdd7a", "#161320", clamp(u*4.2, 10, 14));
+      // 레인 왼쪽 위: 이름 · 판돈 · 현재 배당
+      const lab = p.name+" · $"+bet+(shown && !v.sinkAt ? " · x"+G.mults[shown-1] : "");
+      g.font = "700 11px Rubik, sans-serif"; g.textAlign = "left"; g.textBaseline = "middle"; g.fillStyle = "rgba(11,10,19,.6)"; g.fillRect(4, y0+4, g.measureText(lab).width+12, 16); g.fillStyle = PCOL[p.color]; g.fillText(lab, 10, y0+12.5);
+      const say = says[p.id]; if(say && performance.now() < say.until) pill(g, Math.min(W-70, px+40), headY-14, say.text.length > 14 ? say.text.slice(0,14)+"…" : say.text, "#fff", "#161320", 11);
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1672,11 +1865,144 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 게임 투표 (낮이 오기 전) ----------
+  // 서버가 랜덤으로 고른 게임 카드 3장 + 무작위. 서버가 득표 비례 확률로 뽑으면 여기선 룰렛을 돌려 보여주기만 한다.
+  const GINFO = {
+    derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
+    blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
+    dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+  };
+  const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
+  let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
+  function buildVote(){
+    $("vote-cards").innerHTML = room.vote.options.map((k,i) => '<button class="vote-opt vcard" data-i="'+i+'"><canvas data-k="'+k+'"></canvas><span class="vicon">'+GINFO[k].icon+"</span><b>"+GINFO[k].name+"</b><small>"+GINFO[k].sub+"</small>"+VBAR+"</button>").join("");
+    $("vote-random").classList.remove("hl");
+    $("vote-main").classList.remove("done");
+    $("vote-sub").textContent = "많이 득표한 게임이 선택될 확률이 높습니다";
+    roll = null;
+  }
+  function renderVote(){
+    const V = room.vote, my = me(), total = sum(V.counts), mine = V.votes[myId];
+    voteEnd = performance.now() + V.left;
+    $("vote-day").textContent = "DAY " + (room.day+1);
+    let html = room.players.map((p) => '<div class="vp"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt="">'+esc(p.name)+(p.ready ? '<span class="ok">✔</span>' : "")+"</div>").join("");
+    for(let i=room.players.length;i<4;i++) html += '<div class="vp empty">△</div>';
+    $("vote-players").innerHTML = html;
+    document.querySelectorAll(".vote-opt").forEach((el) => {
+      const i = Number(el.dataset.i), pct = total ? Math.round(V.counts[i]/total*100) : i < 3 ? 33 : 0; // 아무도 안 찍으면 카드 3장 균등
+      el.classList.toggle("mine", mine === i);
+      const voters = room.players.filter((p) => V.votes[p.id] === i);
+      el.querySelector(".vbar").innerHTML = room.players.map((_,k) => { const p = voters[k];
+        return p ? '<i title="'+esc(p.name)+'" style="background:'+PCOL[p.color]+';box-shadow:0 0 8px '+PCOL[p.color]+'"><span>'+MARKS[p.color]+"</span></i>" : "<i></i>"; }).join("");
+      el.querySelector(".vcnt").textContent = pct + "%";
+    });
+    const b = $("vote-ready");
+    b.disabled = V.pick != null || mine == null;
+    b.textContent = V.pick != null ? "추첨 중…" : my.ready ? "준비 취소" : "준비";
+    b.classList.toggle("on", my.ready && V.pick == null);
+    if(V.pick != null && !roll){ // 룰렛: 표를 받은 칸들 사이를 점점 느리게 돌다가 서버가 뽑은 칸에서 멈춘다
+      const cand = [0,1,2,3].filter((i) => total ? V.counts[i] : i < 3), m = cand.length, pi = cand.indexOf(V.pick), n = 16;
+      roll = {t0: performance.now()/1000, seq: [], at: [], k: -1};
+      for(let k=0, t=0; k<n; k++){ roll.seq.push(cand[((pi-(n-1-k))%m+m)%m]); roll.at.push(t); t += 0.06+0.4*Math.pow(k/n,3); }
+    }
+  }
+  $("screen-vote").addEventListener("click", (e) => {
+    const el = e.target.closest(".vote-opt");
+    if(!el || room.vote.pick != null || me().ready) return;
+    ensureAudio(); sfxChip();
+    sendMsg({type:"vote", i:Number(el.dataset.i)});
+  });
+  $("vote-ready").addEventListener("click", () => { ensureAudio(); sendMsg({type:"ready", v:!me().ready}); });
+
+  // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
+  function drawArt(g, key, w, h, now){
+    if(key === "derby"){
+      const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
+      sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
+      g.fillStyle = sky; g.fillRect(0,0,w,y0); g.fillStyle = "#8fd14f"; g.fillRect(0,y0,w,h-y0);
+      for(let i=0;i<3;i++){ // 뒤로 흘러가는 나무
+        const tx = ((i*97-now*28)%(w+40)+w+40)%(w+40)-20, tu = h/130;
+        g.save(); g.translate(tx, y0-2); g.scale(tu,tu); drawBox(g,2,0,2,2,4,2,"#7a4f2a"); drawBox(g,0,4,0,6,5,6,"#3f9b3a"); drawBox(g,1,9,1,4,3,4,"#4cae45"); g.restore();
+      }
+      for(let i=0;i<3;i++){ g.fillStyle = i%2 ? "#e3c58a" : "#d9b877"; g.fillRect(0, y0+i*lane, w, lane); }
+      g.fillStyle = "rgba(120,80,30,.2)"; for(let x=-(now*90)%24; x<w; x+=24) g.fillRect(x, y0, 2, lane*3);
+      g.fillStyle = "rgba(255,255,255,.55)"; for(let i=0;i<=3;i++) g.fillRect(0, y0+i*lane-1, w, 2);
+      ["rabbit","horse","pig"].forEach((k,i) => { const c = now*INFO[k].cad*1.3+i*0.4; drawAnimal(g, k, w*[0.42,0.14,0.3][i], y0+(i+0.88)*lane, lane/13, c, 1, 0, {f:c%1, v:1, now:now}); });
+    } else if(key === "blackjack"){
+      const wall = g.createLinearGradient(0,0,0,h); wall.addColorStop(0,"#3b1e44"); wall.addColorStop(1,"#170d1f");
+      g.fillStyle = wall; g.fillRect(0,0,w,h);
+      for(let i=0;i<3;i++){ g.fillStyle = "rgba(255,221,122,"+(0.12+0.05*S(now*2+i))+")"; g.beginPath(); g.arc(w*(0.15+0.35*i), 0, h*0.12, 0, T); g.fill(); }
+      const ty = h*0.25, du = h/110;
+      drawPerson(g, DEALER_LOOK, w/2, ty+6*du, du, "idle", now, 9);
+      g.fillStyle = "#5a3820"; rr(g, -20, ty-5, w+40, h, 50); g.fill();
+      g.fillStyle = "#1f7a4d"; rr(g, -16, ty, w+32, h, 46); g.fill();
+      const ch = h*0.17, cw = ch*0.7, cy = ty+h*0.03, flip = Math.cos(now*1.4);
+      drawCard(g, w/2-cw*1.15, cy, cw, ch, "A0");
+      drawCard(g, w/2-cw*0.35, cy+2, cw, ch, flip > 0 ? "K1" : null, Math.abs(flip)); // 한 장은 뒤집혔다 돌아왔다
+      for(let k=0;k<4;k++){ g.fillStyle = k%2 ? "#ffdd7a" : "#e8443a"; g.beginPath(); g.ellipse(w/2+cw*1.05, cy+ch-3-k*4, cw*0.32, cw*0.14, 0, 0, T); g.fill(); g.strokeStyle = "rgba(0,0,0,.35)"; g.lineWidth = 1; g.stroke(); }
+    } else if(key === "dice"){
+      g.fillStyle = "#2a1f2e"; g.fillRect(0,0,w,h);
+      const bh = h*0.05, bw = bh*2.4, top = h*0.4, s = Math.min(w*0.22, h*0.13);
+      for(let r=0; r*bh < top; r++) for(let c=-1; c*bw < w; c++){ g.fillStyle = (r*7+c*3)%5 ? "#5a3340" : "#6b3c48"; g.fillRect(c*bw+(r%2)*bw/2+1, r*bh+1, bw-2, bh-2); }
+      const lamp = g.createRadialGradient(w/2, 0, 2, w/2, h*0.1, h*0.5); lamp.addColorStop(0,"rgba(255,221,122,.5)"); lamp.addColorStop(1,"rgba(255,221,122,0)");
+      g.fillStyle = lamp; g.fillRect(0,0,w,h);
+      g.fillStyle = "#3a3340"; g.fillRect(0, top, w, h-top);
+      g.fillStyle = "#6b4424"; g.fillRect(w*0.08, top, w*0.84, h*0.2); g.fillStyle = "#8a5a30"; g.fillRect(w*0.06, top-6, w*0.88, 8);
+      g.fillStyle = "#1f7a4d"; rr(g, w*0.1, top-6-s*0.9, w*0.8, s*0.9, 8); g.fill();
+      for(let k=0;k<2;k++){ // 통통 튀다가 착지할 때마다 눈이 바뀐다
+        const ph = now*3.2+k*1.3, hop = Math.abs(S(ph));
+        drawDie(g, w/2+(k ? 0.7 : -0.7)*s, top-6-s*0.62-hop*h*0.12, s, 1+(Math.floor(ph/PI)*5+k*2)%6, (k ? 1 : -1)*hop*0.7, k === 1);
+      }
+    } else if(key === "penguin"){
+      const sea = h*0.36, sky = g.createLinearGradient(0,0,0,sea); sky.addColorStop(0,"#1b2a5e"); sky.addColorStop(1,"#7fc4e8");
+      g.fillStyle = sky; g.fillRect(0,0,w,sea);
+      for(let k=0;k<2;k++){ // 오로라
+        g.strokeStyle = ["rgba(123,216,143,.4)","rgba(205,139,240,.3)"][k]; g.lineWidth = sea*0.12; g.beginPath();
+        for(let x=0;x<=w+10;x+=10){ const y = sea*(0.25+0.2*k)+S(x*0.03+now*0.8+k*2)*sea*0.08; if(x) g.lineTo(x,y); else g.moveTo(x,y); }
+        g.stroke();
+      }
+      g.fillStyle = "#1a5684"; g.fillRect(0,sea,w,h-sea);
+      g.fillStyle = "rgba(255,255,255,.14)"; for(let x=-30; x<w; x+=34) g.fillRect(x+(now*14)%34, sea+h*0.05, 16, 2);
+      const u = h/150, X = (i) => w*0.12+w*0.76*i/3, t = (now*1.1)%3, i = Math.floor(t), f = Math.min(1, (t-i)/0.6); // 얼음 조각을 폴짝폴짝
+      for(let k=0;k<4;k++){
+        const fw = k === 3 ? 12 : 10-k*1.8;
+        g.save(); g.translate(X(k)-(fw/2+1)*u, sea+(k%3 ? S(now*1.6+k)*1.2 : 0)); g.scale(u,u);
+        drawBox(g, 0, -1.2, 0, fw, 2.2, 5, "#cfeaf7");
+        if(k === 3){ drawBox(g, fw-3, 1, 2, 0.6, 7, 0.6, "#7a4f2a"); drawBox(g, fw-2.4, 5, 2, 3.4, 2.6, 0.4, "#e8443a"); }
+        g.restore();
+      }
+      drawAnimal(g, "penguin", X(i)+(X(i+1)-X(i))*f-LEN.penguin*u/2, sea-1.2*u-S(f*PI)*h*0.1, u, now*2.6, f < 1 ? 0.4 : 0, 0, {f:0, v:0.4, now:now});
+    }
+  }
+  function drawVote(now){
+    const V = room.vote, dpr = Math.max(1, window.devicePixelRatio||1);
+    document.querySelectorAll("#vote-cards canvas").forEach((cv) => {
+      const w = cv.clientWidth, h = cv.clientHeight;
+      if(!w) return;
+      if(cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)){ cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
+      const g = cv.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
+      drawArt(g, cv.dataset.k, w, h, now);
+    });
+    const left = Math.max(0, Math.ceil((voteEnd-performance.now())/1000)), txt = V.pick != null ? "" : String(left), timer = $("vote-timer");
+    if(timer.textContent !== txt){ if(txt && left <= 5 && left > 0) sfxBeep(); timer.textContent = txt; }
+    if(!roll) return;
+    let k = roll.k;
+    while(k+1 < roll.seq.length && now-roll.t0 >= roll.at[k+1]) k++;
+    if(k === roll.k) return;
+    roll.k = k;
+    document.querySelectorAll(".vote-opt").forEach((el) => el.classList.toggle("hl", Number(el.dataset.i) === roll.seq[k]));
+    if(k < roll.seq.length-1) return tone(1200,0.04,"square",0.06); // 딱딱딱…
+    $("vote-main").classList.add("done"); sfxWin();
+    $("vote-sub").textContent = (V.pick === 3 ? "🎲 무작위 → " : "오늘의 도박은 ") + GINFO[V.game].icon + " " + GINFO[V.game].name + "!";
+  }
+
   let lastTs = null, lastRows = 0;
   function loop(ts){
     requestAnimationFrame(loop);
     const dt = lastTs==null ? 0 : Math.min(0.05,(ts-lastTs)/1000);
     lastTs = ts;
+    if(!screens.vote.hidden) return room && room.vote && drawVote(ts/1000);
     if(screens.game.hidden){ if(BW){ drawHome(ts/1000, dt); if(room && room.phase === "lobby") drawLobbyPeople(ts/1000); } return; }
     if(!room || !W) return;
     if(room.phase === "night" || room.phase === "final"){
@@ -1691,6 +2017,7 @@
     }
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
+    if(room.game === "penguin") return drawPenguinGame(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

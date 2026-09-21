@@ -61,6 +61,7 @@ const GAMES = [
   { key: "blackjack", name: "블랙잭", cap: (day) => 50 + 50 * day },
   { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day }, // 하루 DICE_ROUNDS판, cap은 판당
   { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day }, // 하루 PG_ROUNDS판, cap은 판당
+  { key: "nunchi", name: "눈치 숫자", cap: (day) => 50 + 50 * day, min: 3 }, // 하루 NC_ROUNDS판, cap = 판당 고정 참가비. 둘이면 1이 무조건 이득이라 3명부터
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -259,6 +260,7 @@ function broadcastRoom(room) {
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
       dice: room.dice,
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
+      nc: room.nc && { round: room.nc.round, rounds: room.nc.rounds, carry: room.nc.carry, picks: room.nc.shown }, // 고른 숫자는 공개(ncReveal) 전까지 절대 안 내보낸다
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, voter: room.vote.voter, game: room.vote.game },
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
         dealer: room.bj.hidden ? room.bj.dealer.map((c, i) => (i === 1 ? null : c)) : room.bj.dealer } },
@@ -334,6 +336,7 @@ function startDay(room, key) {
   room.bj = game.key === "blackjack" ? { hand: 1, hands: BJ_HANDS, dealer: [], hidden: true, deck: bjDeck() } : null;
   room.pg = game.key === "penguin" ? { round: 1, rounds: PG_ROUNDS, probs: PG_PROBS, mults: PG_MULTS } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
+  room.nc = game.key === "nunchi" ? { round: 1, rounds: NC_ROUNDS, carry: 0, picks: {}, shown: null } : null;
   room.race = null;
   room.result = null;
   room.night = null;
@@ -341,6 +344,7 @@ function startDay(room, key) {
   for (const p of room.players.values()) Object.assign(p, { ready: false, begging: false, begged: false, bets: {}, bj: null, pg: null, dayStart: p.money });
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
   sys(room, "☀️ DAY " + room.day + "/" + room.days + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
+  if (room.nc) sys(room, "🙊 1~10 중 남과 안 겹친 가장 작은 숫자가 판돈 독식! (판당 참가비 $" + room.cap + ")");
   broadcastRoom(room);
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
@@ -351,6 +355,7 @@ function checkAllReady(room) {
   if (room.game === "blackjack") return bjDeal(room);
   if (room.game === "dice") return diceRoll(room);
   if (room.game === "penguin") return pgStart(room);
+  if (room.game === "nunchi") return ncReveal(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -543,6 +548,81 @@ function pgSettle(room) {
   }, 5000);
 }
 
+// ---------- 눈치 숫자 ----------
+// 1~10 중 하나를 몰래 고른다(판당 참가비 = room.cap 고정, me.bets[0]). 남과 안 겹친 숫자 중 가장 작은 걸 고른 사람이 판돈의 95% 독식.
+// 전원 겹치면 판돈은 다음 판으로 이월, 그날 마지막 판까지 겹치면 참가자끼리 나눈다. 혼자 참가 + 이월금 0 = 무효(환불).
+// 고른 숫자는 room.nc.picks에 서버만 들고 있다가 공개(ncReveal) 때 shown으로 내보낸다. 본인에겐 ncPick으로 따로 알려 준다.
+const NC_ROUNDS = 3;
+const NC_EDGE = 0.95;
+
+function ncPick(room, ws, me, n) {
+  const N = room.nc;
+  if (!Number.isInteger(n) || n < 1 || n > 10) return;
+  if (me.bets[0] && N.picks[me.id] === n) { // 같은 숫자를 다시 누르면 참가 취소(환불)
+    me.money += me.bets[0];
+    me.bets = {};
+    delete N.picks[me.id];
+    n = 0;
+  } else if (!me.bets[0]) { // 처음 고를 때만 참가비를 낸다 (그 뒤엔 숫자만 바뀐다)
+    if (me.money < room.cap) return send(ws, { type: "error", message: "참가비($" + room.cap + ")가 모자라요…" });
+    me.money -= room.cap;
+    me.bets[0] = room.cap;
+  }
+  if (n) N.picks[me.id] = n;
+  send(ws, { type: "ncPick", n });
+  broadcastRoom(room);
+}
+
+// 판정. picks = { playerId: 숫자 } (참가자만), pot = 이월금 + 참가비 합, carry = 이월금, last = 그날 마지막 판
+function ncJudge(picks, pot, carry, last) {
+  const ids = Object.keys(picks), cnt = {};
+  for (const id of ids) cnt[picks[id]] = (cnt[picks[id]] || 0) + 1;
+  if (!ids.length || (ids.length === 1 && !carry)) return { outcome: "void" }; // 아무도 없으면 그대로, 혼자면 환불
+  const winner = ids.filter((id) => cnt[picks[id]] === 1).sort((a, b) => picks[a] - picks[b])[0];
+  if (winner) return { outcome: "win", winner, prize: Math.floor(pot * NC_EDGE) };
+  return last ? { outcome: "split", share: Math.floor(pot / ids.length) } : { outcome: "carry" };
+}
+
+// 전원 준비 → 숫자 공개. 판정은 지금 해 두고(도중에 누가 나가도 연출과 결과가 안 어긋나게) 돈은 뒤집기 연출이 끝난 뒤에 움직인다.
+// 클라이언트가 작은 숫자부터 0.7초 간격으로 팻말을 뒤집는다 → 1초 + 0.7초 × 숫자 개수 뒤 정산
+function ncReveal(room) {
+  const N = room.nc;
+  N.shown = {};
+  N.pot = N.carry;
+  for (const p of room.players.values()) if (p.bets[0] && N.picks[p.id]) { N.shown[p.id] = N.picks[p.id]; N.pot += p.bets[0]; } // clear로 참가비를 빼 갔으면 무효
+  N.res = ncJudge(N.shown, N.pot, N.carry, N.round >= N.rounds);
+  room.phase = "ncReveal";
+  broadcastRoom(room);
+  room.timer = setTimeout(() => ncSettle(room), 1000 + 700 * new Set(Object.values(N.shown)).size);
+}
+
+function ncSettle(room) {
+  const N = room.nc, R = N.res, payouts = {};
+  for (const p of room.players.values()) {
+    if (!(p.id in N.shown)) continue;
+    const bet = p.bets[0], win = R.outcome === "void" ? bet : R.outcome === "split" ? R.share : p.id === R.winner ? R.prize : 0;
+    p.money += win;
+    p.bets = {};
+    payouts[p.id] = { bet, win };
+  }
+  if (R.outcome !== "void") N.carry = R.outcome === "carry" ? N.pot : 0; // 무효면 이월금은 그대로
+  room.phase = "result";
+  room.result = { picks: N.shown, outcome: R.outcome, winner: R.winner, pot: N.pot, carry: N.carry, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => ncNext(room), 5500);
+}
+
+function ncNext(room) {
+  const N = room.nc;
+  if (N.round >= N.rounds) return startNight(room);
+  Object.assign(N, { round: N.round + 1, picks: {}, shown: null, res: null });
+  room.phase = "betting";
+  room.result = null;
+  for (const p of room.players.values()) p.ready = false;
+  broadcastRoom(room);
+  checkAllReady(room);
+}
+
 // ---------- 주사위 ----------
 // 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
 // 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
@@ -680,6 +760,8 @@ function handleMessage(ws, msg) {
   if (!room) return;
   const me = room.players.get(ws);
   const canBet = room.phase === "betting" && !me.ready && !me.mining;
+  if (msg.type === "bet" && room.nc) return; // 눈치 숫자는 ncPick으로만 참가한다 (참가비 고정)
+  if (msg.type === "ncPick") { if (canBet && room.nc) ncPick(room, ws, me, msg.n); return; }
 
   if (msg.type === "start") {
     if (room.phase === "lobby" && me === hostOf(room)) startVote(room);
@@ -695,6 +777,7 @@ function handleMessage(ws, msg) {
   } else if (msg.type === "again") {
     if (room.phase !== "final") return;
     Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
+    room.nc = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     broadcastRoom(room);
     broadcastRoomList();
@@ -832,6 +915,56 @@ if (process.argv.includes("--check")) {
   assert(G1.money === 900 + 124 && G2.money === 950 && gr.result.payouts[G1.id].win === 124, "2칸(x1.24)에서 멈추면 $124, 풍덩은 0");
   delete process.env.GAME;
   rooms.delete(gr.code);
+
+  // 눈치 숫자: 3명 — 1판 A=1,B=1,C=2 → C 독식 / 2판 전원 3 → 이월 / 3판 A=2,B=4,C 구경 → A가 이월금까지. 숫자는 공개 전까지 안 샌다
+  assert.deepStrictEqual(ncJudge({ a: 3, b: 3 }, 200, 0, true), { outcome: "split", share: 100 });
+  assert.deepStrictEqual(ncJudge({ a: 3 }, 100, 0, false), { outcome: "void" }, "혼자 + 이월금 0 = 무효");
+  assert.deepStrictEqual(ncJudge({ a: 3 }, 400, 300, false), { outcome: "win", winner: "a", prize: 380 }, "혼자라도 이월금이 있으면 꿀꺽");
+  process.env.GAME = "nunchi";
+  const fw = () => { const w = { id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, sent: [] }; w.send = (d) => w.sent.push(JSON.parse(d)); return w; };
+  const nw = [fw(), fw(), fw()];
+  handleMessage(nw[0], { type: "create", name: "A" });
+  handleMessage(nw[1], { type: "join", id: nw[0].room.code, name: "B" });
+  const nr = nw[0].room;
+  assert(!playable(nr).some((g) => g.key === "nunchi"), "둘이면 투표 후보에 없다");
+  handleMessage(nw[2], { type: "join", id: nr.code, name: "C" });
+  assert(playable(nr).some((g) => g.key === "nunchi"));
+  handleMessage(nw[0], { type: "start" });
+  const [NA, NB, NC] = nw.map((w) => nr.players.get(w));
+  assert(nr.game === "nunchi" && nr.cap === 100 && nr.phase === "betting");
+  handleMessage(nw[0], { type: "bet", i: 0, amount: 100 });
+  assert(!NA.bets[0] && NA.money === 1000, "제네릭 bet은 막힌다");
+  const ncRound = (acts) => { // acts = [[플레이어 번호, 숫자], ...] → 전원 준비 → 공개 → 정산
+    nw.forEach((w) => { w.sent = []; });
+    for (const [k, n] of acts) handleMessage(nw[k], { type: "ncPick", n });
+    nw.forEach((w) => handleMessage(w, { type: "ready", v: true }));
+    assert(nr.phase === "ncReveal" && nw[1].sent.at(-1).room.nc.picks);
+    assert(nw.flatMap((w) => w.sent).every((m) => m.type !== "room" || m.room.phase !== "betting" || m.room.nc.picks == null), "공개 전엔 숫자가 브로드캐스트에 없다");
+    clearTimeout(nr.timer);
+    ncSettle(nr);
+    clearTimeout(nr.timer);
+    return nr.result;
+  };
+  let nres = ncRound([[0, 5], [0, 1], [1, 1], [2, 7], [2, 7], [2, 2]]); // A는 5→1로 바꿈(참가비 한 번만), C는 7 → 7(취소·환불) → 2
+  assert.deepStrictEqual(nw[2].sent.filter((m) => m.type === "ncPick").map((m) => m.n), [7, 0, 2], "내 숫자는 나한테만");
+  assert(nres.outcome === "win" && nres.winner === NC.id && nres.pot === 300 && nres.carry === 0);
+  assert(NA.money === 900 && NB.money === 900 && NC.money === 900 + 285, "C가 floor(300×0.95)=285 독식");
+  ncNext(nr);
+  nres = ncRound([[0, 3], [1, 3], [2, 3]]);
+  assert(nres.outcome === "carry" && nres.carry === 300 && nr.nc.carry === 300 && NA.money === 800 && NC.money === 1085, "전원 겹침 → 이월");
+  ncNext(nr);
+  NC.money = 50;
+  handleMessage(nw[2], { type: "ncPick", n: 1 });
+  assert(!NC.bets[0] && nw[2].sent.at(-1).type === "error", "참가비가 모자라면 거절");
+  NC.money = 1085;
+  nres = ncRound([[0, 2], [1, 4]]);
+  assert(nres.outcome === "win" && nres.winner === NA.id && nres.pot === 500 && !nres.payouts[NC.id]);
+  assert(NA.money === 800 - 100 + 475 && NB.money === 700 && NC.money === 1085 && nr.nc.carry === 0, "A가 floor(500×0.95)=475");
+  ncNext(nr);
+  assert(nr.phase === "night", "3판 끝나면 밤");
+  clearTimeout(nr.timer);
+  delete process.env.GAME;
+  rooms.delete(nr.code);
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);

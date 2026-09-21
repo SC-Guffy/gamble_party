@@ -168,6 +168,19 @@
   #pg-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   #btn-go{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stop{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
   #pg-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  /* 플링코: 위험도 3버튼 + 내 배당표(칸 11개) */
+  #pk-board{display:flex;flex-direction:column;gap:8px}
+  #pk-risk{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  #pk-risk button{background:var(--panel);border:2px solid var(--panel-edge);border-radius:12px;padding:8px 4px;cursor:pointer;font-weight:800;font-size:14px;line-height:1.35}
+  #pk-risk button small{display:block;font-weight:600;font-size:11px;color:var(--ink-dim)}
+  #pk-risk button.sel{border-color:var(--gold);background:#2b2844}
+  #pk-risk button:disabled{cursor:not-allowed;opacity:.6}
+  #pk-table{display:grid;grid-template-columns:repeat(11,1fr);gap:3px}
+  #pk-table span{min-width:0;border-radius:7px;padding:5px 0 4px;text-align:center;border:2px solid transparent}
+  #pk-table b{display:block;font-size:clamp(9px,2.7vw,13px);letter-spacing:-.03em}
+  #pk-table small{display:block;font-size:clamp(7.5px,2.1vw,10px);opacity:.75;letter-spacing:-.03em}
+  #pk-table span.hit{border-color:#fff;animation:spot-pop .5s ease}
+  #pk-hint{font-size:12.5px;color:var(--ink-dim);text-align:center}
   :is(#bj-actions,#pg-actions) button{font-family:var(--font-display);font-size:13px;border:none;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
   :is(#bj-actions,#pg-actions) button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
   :is(#bj-actions,#pg-actions) button:disabled{opacity:.35;cursor:not-allowed}
@@ -288,6 +301,15 @@
       <div id="panel-bet">
         <div id="cards"></div>
         <div id="dice-board" hidden></div>
+        <div id="pk-board" hidden>
+          <div id="pk-risk">
+            <button data-r="0">🛡️ 안전<small></small></button>
+            <button data-r="1">🎯 보통<small></small></button>
+            <button data-r="2">🔥 위험<small></small></button>
+          </div>
+          <div id="pk-table"></div>
+          <div id="pk-hint"></div>
+        </div>
         <div id="bet-actions">
         <div id="bet-hint"></div>
         <div id="chips">
@@ -773,6 +795,8 @@
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
+    const pk = r.game === "plinko";
+    if(pk && r.pk.drops && pkT0 == null) pkT0 = performance.now()-r.pk.since; // 공 낙하 타임라인의 기준 시각 (도중 입장이면 그만큼 지난 장면부터)
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
@@ -781,6 +805,7 @@
       if(r.entrants){ clocks = r.entrants.map(() => Math.random()); buildCards(); }
       if(dice){ diceSnap = {}; buildDiceBoard(); }
       pgVis = {};
+      pkVis = {}; pkT0 = null; pkHit = {}; pkFlash = {};
     }
     if(dice && !$("dice-board").children.length) buildDiceBoard(); // 도중 입장
     if(r.entrants && clocks.length !== r.entrants.length) clocks = r.entrants.map(() => Math.random());
@@ -789,14 +814,23 @@
     $("bet-actions").hidden = dice && r.phase !== "betting";
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
+    $("pk-board").hidden = !pk;
+    if(pk && r.phase === "pkDrop"){ $("panel-bet").hidden = false; $("bet-actions").hidden = true; } // 공이 떨어지는 동안에도 내 배당표는 보여준다 (칩·준비 버튼만 숨김)
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+      plinko: renderPk,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -854,6 +888,7 @@
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
+    if(room.pk && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 플링코 " + room.pk.round + "/" + room.pk.rounds + "판";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -987,6 +1022,17 @@
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
     $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.pk) $("result-next").textContent = room.pk.round < room.pk.rounds ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.pk){
+      $("result-title").textContent = "🔴 플링코 결과";
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0;
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag">'+PK_RISK[pkRiskOf(p)][0]+" x"+res.mults[p.id]+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(mine.win > mine.bet*4 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
     if(room.pg){
       $("result-title").textContent = "🐧 빙산 건너기 결과";
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1198,11 +1244,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1643,6 +1689,121 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 플링코 ----------
+  // 베팅은 블랙잭처럼 칩(0번 칸) + 위험도 3버튼. 배당표는 서버가 준 room.pk.tables를 그대로 쓴다 (칸 k = 오른쪽으로 튄 횟수).
+  // 캔버스 칸에 적힌 숫자는 "내 위험도" 표다. 위험도는 사람마다 다를 수 있어서 남의 공은 착지 팝업에 그 사람 위험도·배당이 뜬다.
+  const PK_RISK = [["🛡️","안전"],["🎯","보통"],["🔥","위험"]], PK_FALL = 3, PK_GAP = 0.4; // 공 하나 낙하 시간 / 출발 간격(초). 서버 PK_FALL·PK_GAP과 같아야 함
+  let pkVis = {}, pkT0 = null, pkHit = {}, pkFlash = {}; // pkVis = 공별 연출 상태 {seg, landed, bin, m}, pkT0 = 첫 공 출발 시각(ms), pkHit/pkFlash = 핀/칸이 번쩍인 시각
+  const pkRiskOf = (p) => (p.pkRisk == null ? 1 : p.pkRisk);
+  const pkChance = (n, k) => { let c = 1; for(let i=0;i<k;i++) c = c*(n-i)/(i+1); return c/Math.pow(2,n)*100; }; // 칸 k에 떨어질 확률(%) = C(n,k)/2^n
+  const pkCol = (d, half) => "rgb("+[[90,255],[88,221],[112,122]].map((c) => Math.round(c[0]+(c[1]-c[0])*Math.pow(d/half,1.3)))+")"; // 가운데 회색 → 양끝 금색
+  function renderPk(){
+    const my = me(), K = room.pk, bet = my.bets[0] || 0, betting = room.phase === "betting", locked = !betting || my.ready || my.mining;
+    const risk = pkRiskOf(my), tb = K.tables[risk], half = (tb.length-1)/2, v = pkVis[myId], hit = v && v.landed ? v.bin : -1;
+    document.querySelectorAll(".chip").forEach((c) => { c.disabled = locked; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : bet ? "공 떨어뜨리기 (준비 완료)" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    document.querySelectorAll("#pk-risk button").forEach((b, i) => {
+      b.disabled = locked; b.classList.toggle("sel", i === risk);
+      b.querySelector("small").textContent = "x"+Math.min.apply(null, K.tables[i])+" ~ x"+K.tables[i][0];
+    });
+    $("pk-table").innerHTML = tb.map((m, k) => { const d = Math.abs(k-half), c = pkChance(tb.length-1, k);
+      return '<span class="'+(k === hit ? "hit" : "")+'" style="background:'+pkCol(d, half)+";color:"+(d/half > 0.5 ? "#161320" : "#f5f3fb")+'"><b>x'+m+"</b><small>"+(c < 1 ? c.toFixed(1) : Math.round(c))+"%</small></span>"; }).join("");
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length, net = v ? Math.floor(bet*v.m+1e-9)-bet : 0;
+    $("pk-hint").textContent = betting ? "칸 아래 %는 공이 그 칸에 떨어질 확률. 위험할수록 가운데는 짜고 양끝이 크게 터져요. (화면의 칸 숫자 = 내 위험도 기준)" :
+      hit >= 0 ? "x"+v.m+" 칸에 착지! "+(net >= 0 ? "+$" : "−$")+Math.abs(net) : bet ? "내 공이 떨어지는 중… 🤞" : "이번 판은 구경 중";
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🔴 " + K.round + "/" + K.rounds + "번째 판 · 내 베팅 $" + bet + " · " + PK_RISK[risk][1] + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
+  }
+  $("pk-risk").addEventListener("click", (e) => {
+    const el = e.target.closest("button");
+    if(!el || el.disabled) return;
+    ensureAudio(); sfxChip();
+    sendMsg({type:"pkRisk", v:Number(el.dataset.r)});
+  });
+
+  // 공의 위치: path(0 왼쪽 / 1 오른쪽)를 따라 투입구 → 핀 → … → 칸으로 통통 튀는 포물선. f = 0~1, seg = 지금 향하고 있는 핀 줄(n이면 칸)
+  // G = {cx, s(핀 간격), y0(투입구), pinY(줄), rad(핀+공 반지름), endY(칸 위), hop(튀어 오르는 세기), off(같은 칸에 쌓일 때 가로로 비키는 양)}
+  function pkBall(G, path, f){
+    const n = path.length, tt = clamp(f,0,1)*(n+1), seg = Math.min(n, Math.floor(tt)), u = tt-seg;
+    let k = 0; for(let i=0;i<seg-1;i++) k += path[i]; // 직전 핀에 닿기까지 오른쪽으로 튄 횟수
+    const at = (i, kk) => i < 0 ? [G.cx, G.y0] : i < n ? [G.cx+(kk-i/2)*G.s, G.pinY(i)-G.rad] : [G.cx+(kk-n/2)*G.s+G.off, G.endY];
+    const a = at(seg-1, k), b = at(seg, k+(seg ? path[seg-1] : 0)), hop = seg ? G.hop : 0; // 첫 구간은 그냥 자유낙하
+    return {x:a[0]+(b[0]-a[0])*u, y:a[1]-hop*u+(b[1]-a[1]+hop)*u*u, seg:seg};
+  }
+  function drawPlinko(ts, dt){
+    const g = ctx, now = ts/1000, K = room.pk, tb = K.tables[pkRiskOf(me())], rows = tb.length-1, half = rows/2, res = room.phase === "result" && room.result;
+    const bgG = g.createLinearGradient(0,0,0,H); bgG.addColorStop(0,"#0a0820"); bgG.addColorStop(1,"#1d1040");
+    g.fillStyle = bgG; g.fillRect(0,0,W,H);
+    for(let i=0;i<26;i++){ g.globalAlpha = 0.15+0.35*Math.abs(S(now*1.3+i*2.1)); g.fillStyle = i%3 ? "#5ee8ff" : "#ff4fd8"; g.fillRect((i*149)%W, (i*83)%H, 2, 2); } // 깜빡이는 네온 먼지
+    g.globalAlpha = 1;
+    const topPad = H*0.07, binH = clamp(H*0.085, 20, 34), rowH = (H-topPad-binH-5)/(rows+0.35), s = Math.min(W/(rows+2.4), rowH*1.2), cx = W/2;
+    const pinY = (r) => topPad+rowH*(r+0.8), binTop = topPad+rowH*(rows+0.35), pr = Math.max(2, s*0.085), br = s*0.21;
+    const G = {cx:cx, s:s, y0:-br, pinY:pinY, rad:pr+br, endY:binTop-br+1, hop:rowH*1.5, off:0};
+    for(const sd of [-1,1]){ // 보드 양옆 네온 벽 (위는 좁은 투입구)
+      g.beginPath(); g.moveTo(cx+sd*(1.25-0.5*pinY(0)/rowH)*s, 0); g.lineTo(cx+sd*(1.25+0.5*(binTop-pinY(0))/rowH)*s, binTop);
+      g.strokeStyle = "rgba(94,232,255,.16)"; g.lineWidth = 8; g.stroke(); g.strokeStyle = "rgba(170,242,255,.75)"; g.lineWidth = 2; g.stroke();
+    }
+    for(let r=0;r<rows;r++) for(let j=0;j<r+3;j++){ // 핀: 줄마다 청록/분홍, 공이 닿으면 하얗게 번쩍
+      const px = cx+(j-(r+2)/2)*s, gl = clamp(1-(now-(pkHit[r+","+j] || -9))/0.35, 0, 1), col = r%2 ? "255,79,216" : "94,232,255";
+      g.fillStyle = "rgba("+col+","+(0.14+0.08*S(now*1.7+r*0.9+j*1.3)+0.5*gl)+")"; g.beginPath(); g.arc(px, pinY(r), pr*(2.6+2*gl), 0, T); g.fill();
+      g.fillStyle = gl > 0.05 ? "#fff" : "rgb("+col+")"; g.beginPath(); g.arc(px, pinY(r), pr*(1+0.5*gl), 0, T); g.fill();
+    }
+    const fs = clamp(s*0.31, 8, 13);
+    tb.forEach((m, k) => { // 칸: 양끝 금색 ~ 가운데 회색, 공이 떨어지면 번쩍
+      const d = Math.abs(k-half), fl = clamp(1-(now-(pkFlash[k] || -9))/0.7, 0, 1), x = cx+(k-half-0.5)*s+1;
+      g.fillStyle = pkCol(d, half); rr(g, x-fl*2, binTop-fl*3, s-2+fl*4, binH+fl*3, 5); g.fill();
+      if(fl){ g.fillStyle = "rgba(255,255,255,"+fl*0.8+")"; g.fill(); }
+      g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillStyle = d/half > 0.5 || fl > 0.4 ? "#161320" : "#f5f3fb";
+      g.fillText("x"+m, x+s/2-1, binTop+binH/2+0.5);
+    });
+
+    // 공: 참가자마다 PK_GAP 간격으로 출발. 같은 칸에 먼저 떨어진 공이 있으면 옆으로 살짝 비켜 앉는다
+    const drops = K.drops || [], t = pkT0 == null ? 0 : (ts-pkT0)/1000, seen = {}, pops = [];
+    drops.forEach((d, di) => {
+      const p = room.players.find((q) => q.id === d.id), bin = sum(d.path), f = (t-di*PK_GAP)/PK_FALL;
+      if(!p || f < 0) return; // 나간 사람 / 아직 출발 전
+      const j = seen[bin] = (seen[bin] || 0)+1, m = K.tables[d.risk][bin], mine = d.id === myId;
+      G.off = (j%2 ? -1 : 1)*Math.floor(j/2)*br*0.9;
+      const v = pkVis[d.id] || (pkVis[d.id] = {seg:0, landed:false, bin:bin, m:m, quiet:f > 1.15}), b = pkBall(G, d.path, f); // quiet = 이미 끝난 장면에 들어왔으면 소리 없이
+      for(; v.seg < b.seg; v.seg++){ // 핀에 닿을 때마다 통!
+        pkHit[v.seg+","+(sum(d.path.slice(0, v.seg))+1)] = now;
+        if(!v.quiet) tone(560+v.seg*42, 0.06, "triangle", mine ? 0.09 : 0.04, 380+v.seg*30);
+      }
+      if(f >= 1 && !v.landed){
+        v.landed = true; v.at = now; pkFlash[bin] = now;
+        if(!v.quiet){
+          if(mine && m > 1) sfxCoin(); else tone(mine ? 180 : 240, mine ? 0.25 : 0.12, "sine", mine ? 0.14 : 0.06, mine ? 70 : 120);
+          burst(m > 1 ? 16 : 7, null, G.endY, (dx,dy) => ({x:b.x, color:R()<0.5 ? PCOL[p.color] : "#fff", vx:dx*130, vy:-Math.abs(dy)*180-30, g:420, life:0.6, w:3+R()*3, spin:6}));
+          if(m >= 10){ fireworks(); sfxSparkle(); setOverlay("🎆 "+p.name+" x"+m+"!", 1800); }
+        }
+        if(mine) renderPk();
+      }
+      if(!v.landed) for(let q=2;q>0;q--){ const tr = pkBall(G, d.path, f-q*0.012); g.globalAlpha = 0.3/q; g.fillStyle = PCOL[p.color]; g.beginPath(); g.arc(tr.x, tr.y, br*(1-q*0.15), 0, T); g.fill(); } // 꼬리
+      g.globalAlpha = 1;
+      g.fillStyle = PCOL[p.color]; g.beginPath(); g.arc(b.x, b.y, br, 0, T); g.fill(); g.lineWidth = mine ? 2.5 : 1.5; g.strokeStyle = mine ? "#fff" : "#0b0a13"; g.stroke();
+      g.fillStyle = "rgba(255,255,255,.75)"; g.beginPath(); g.arc(b.x-br*0.3, b.y-br*0.35, br*0.28, 0, T); g.fill();
+      if(v.landed) pops.push([b.x, binTop-br*2-13-di*18, PK_RISK[d.risk][0]+" x"+m, PCOL[p.color], clamp((now-v.at)/0.2, 0, 1)]);
+    });
+    for(const q of pops) pill(g, clamp(q[0], 40, W-40), q[1]+(1-q[4])*10, q[2], q[3], "#161320", 11*(0.6+0.4*q[4])); // 착지 팝업: 그 사람의 위험도 + 실제 배당
+
+    // 플레이어들: 넓은 화면은 보드 양옆 바닥, 좁은 화면은 삼각형 핀 배열 위쪽의 빈 구석(네온 발판)에 선다
+    const wide = cx-(half+1.2)*s > 120, edge = wide ? cx-(half+1.3)*s : cx-2.9*s, feet = wide ? H-4 : topPad+rowH*3.5, pu = wide ? clamp(H/88, 2, 3.6) : clamp((feet-40)/21, 1.5, 3.2), n = room.players.length;
+    for(let sd=0; sd<Math.min(2,n); sd++){ const x = sd ? W-edge+4 : 4; g.fillStyle = "rgba(255,79,216,.22)"; g.fillRect(x-2, feet-2, edge-4, 6); g.fillStyle = "#ff8be6"; g.fillRect(x, feet, edge-8, 2); }
+    room.players.forEach((p, k) => {
+      const right = k%2, x0 = 4+(edge-8)*((k>>1)+0.5)/Math.ceil((n-right)/2), px = right ? W-x0 : x0;
+      const d = drops.find((q) => q.id === p.id), v = d && pkVis[p.id], done = v && v.landed, bet = p.bets[0] || (res && res.payouts[p.id] ? res.payouts[p.id].bet : 0), net = done ? Math.floor(bet*v.m+1e-9)-bet : 0;
+      drawPerson(g, p.look, px, feet, pu, p.mining ? "mine" : done ? (v.m > 1 ? "cheer" : "sad") : "idle", now, k*1.7);
+      const lines = [[wide || p.name.length <= 4 ? p.name : p.name.slice(0,4)+"…", PCOL[p.color]], ["$"+p.money, "#ffdd7a"]];
+      if(done) lines.push([(net >= 0 ? "+$" : "−$")+Math.abs(net), net >= 0 ? "#7bd88f" : "#ff5d72"]);
+      else if(bet) lines.push([PK_RISK[d ? d.risk : pkRiskOf(p)][0]+" $"+bet, "#fff"]);
+      personLabel(g, p, px, feet-21*pu, wide ? 11 : 10, lines);
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1873,7 +2034,8 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
+    plinko:    {name:"플링코", icon:"🔴", sub:"하루 3판 · 공이 어디로 튈까"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
   let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
@@ -1919,6 +2081,21 @@
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
+    if(key === "plinko"){ // 네온 핀보드에 공이 톡톡 튀며 떨어진다 (2.6초마다 새 경로)
+      const bgG = g.createLinearGradient(0,0,0,h); bgG.addColorStop(0,"#0a0820"); bgG.addColorStop(1,"#1d1040"); g.fillStyle = bgG; g.fillRect(0,0,w,h);
+      const n = 6, s = w/(n+2.6), rowH = h*0.46/(n+1.2), pinY = (r) => h*0.04+rowH*(r+0.8), binTop = h*0.04+rowH*(n+0.35), pr = Math.max(1.5, s*0.09), br = s*0.22;
+      const lap = Math.floor(now/2.6), f = Math.min(1, (now/2.6-lap)*1.25), path = [];
+      for(let i=0;i<n;i++) path.push(Math.floor(Math.abs(S(lap*7.13+i*3.7))*1000)&1);
+      const b = pkBall({cx:w/2, s:s, y0:-br, pinY:pinY, rad:pr+br, endY:binTop-br+1, hop:rowH*1.5, off:0}, path, f);
+      for(let r=0;r<n;r++) for(let j=0;j<r+3;j++){
+        const px = w/2+(j-(r+2)/2)*s, near = Math.hypot(px-b.x, pinY(r)-b.y) < pr+br+3, col = r%2 ? "255,79,216" : "94,232,255";
+        g.fillStyle = "rgba("+col+","+(near ? 0.6 : 0.2)+")"; g.beginPath(); g.arc(px, pinY(r), pr*2.6, 0, T); g.fill();
+        g.fillStyle = near ? "#fff" : "rgb("+col+")"; g.beginPath(); g.arc(px, pinY(r), pr, 0, T); g.fill();
+      }
+      for(let k=0;k<=n;k++){ g.fillStyle = f >= 1 && k === sum(path) ? "#fff" : pkCol(Math.abs(k-n/2), n/2); rr(g, w/2+(k-(n+1)/2)*s+1, binTop, s-2, h*0.045, 3); g.fill(); }
+      g.fillStyle = PCOL[lap%4]; g.beginPath(); g.arc(b.x, b.y, br, 0, T); g.fill(); g.lineWidth = 1.5; g.strokeStyle = "#0b0a13"; g.stroke();
+      return;
+    }
     if(key === "derby"){
       const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
       sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
@@ -2020,6 +2197,7 @@
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
     if(room.game === "penguin") return drawPenguinGame(ts, dt);
+    if(room.game === "plinko") return drawPlinko(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

@@ -238,6 +238,7 @@ function createRoom(title, hostName) {
     raceStart: 0,
     result: null,
     timer: null,
+    rcLeft: new Map(), // 재접속: 명시적으로 나간 사람의 스냅샷 (토큰 → {money, history…}). Map이라 혹시 JSON이 돼도 {}로 나간다
   };
   rooms.set(room.code, room);
   return room;
@@ -309,6 +310,7 @@ function voteCounts(room) { // 나간 사람의 표는 안 센다
 
 function checkVoteReady(room) {
   if (room.phase !== "vote" || room.vote.pick !== null) return;
+  if ([...room.players.values()].every((p) => p.rcAway || p.id in room.vote.votes)) return resolveVote(room); // 재접속: 끊긴 사람(📴)은 표 없이 건너뛴다
   for (const p of room.players.values()) if (!(p.id in room.vote.votes)) return;
   resolveVote(room);
 }
@@ -347,6 +349,7 @@ function startDay(room, key) {
 
 function checkAllReady(room) {
   if (room.phase !== "betting" || room.players.size === 0) return;
+  for (const p of room.players.values()) if (p.rcAway) p.ready = true; // 재접속: 끊긴 사람(📴)은 자동 준비 (걸어 둔 베팅은 그대로)
   for (const p of room.players.values()) if (!p.ready && !p.mining) return;
   if (room.game === "blackjack") return bjDeal(room);
   if (room.game === "dice") return diceRoll(room);
@@ -598,6 +601,7 @@ function startNight(room) {
 // 파산자는 구걸을 한 번 해봤으면 더 할 게 없으니 준비된 걸로 친다 (나머지가 적선할지 말지 정하고 넘어간다)
 function checkNightReady(room) {
   if (room.phase !== "night" || room.players.size === 0) return;
+  for (const p of room.players.values()) if (p.rcAway) p.ready = true; // 재접속: 끊긴 사람(📴)은 자동 준비
   for (const p of room.players.values()) if (!p.ready && !(p.money === 0 && p.begged)) return;
   for (const p of room.players.values()) {
     p.begging = false;
@@ -635,6 +639,7 @@ function joinRoom(ws, room, name) {
   if (room.phase === "night" || room.phase === "final") history[room.day] = START_MONEY;
   room.players.set(ws, { id: ws.id, name: cleanName(name), color, look: pickLook(room), money: START_MONEY, dayStart: START_MONEY, history,
     ready: false, begging: false, begged: false, mining: false, bets: {} });
+  rcJoin(ws, room);
   send(ws, { type: "joined", playerId: ws.id });
   broadcastRoom(room);
   broadcastRoomList();
@@ -662,6 +667,7 @@ function leaveRoom(ws) {
 }
 
 function handleMessage(ws, msg) {
+  if (msg.type === "rcHello") return rcHello(ws, msg.token); // 재접속
   if (msg.type === "create") {
     if (ws.room) return;
     joinRoom(ws, createRoom(msg.title, msg.name), msg.name);
@@ -696,6 +702,7 @@ function handleMessage(ws, msg) {
     if (room.phase !== "final") return;
     Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
+    room.rcLeft.clear(); rcHostFix(room); // 재접속: 지난 판 스냅샷은 버리고, 끊긴 사람(📴)은 방장 자리에서 뒤로
     broadcastRoom(room);
     broadcastRoomList();
   } else if (msg.type === "bet") {
@@ -748,8 +755,109 @@ function handleMessage(ws, msg) {
     broadcast(room, { type: "toast", text: "🪙 " + me.name + " → " + to.name + " $" + ALMS + " 적선!", coin: true });
     broadcastRoom(room);
   } else if (msg.type === "leave") {
+    rcLeave(ws, room, me);
     leaveRoom(ws);
+    rcCheckEmpty(room); // 남은 사람이 전부 📴일 수도 있다
   }
+}
+
+// ---------- 재접속 ----------
+// 토큰 = 브라우저 localStorage에 둔 내 신분증(rcHello로 받는다). players는 통째로 브로드캐스트되니 player엔 절대 안 넣고 서버 전용 Map에만 둔다.
+// 끊기면(창 닫힘·폰 꺼짐·새로고침·핑 정리) 자리를 그대로 두고 p.rcAway = true(📴). 같은 토큰으로 rcHello 하면 그 자리에 다시 앉힌다.
+// 📴인 동안: 베팅/밤은 자동 준비, 투표는 건너뜀, 결정이 필요한 단계는 RC_AUTO마다 rcAutoAct가 대신 처리.
+// "방 나가기"는 자리를 비우되 스냅샷을 room.rcLeft에 맡겨 둔다 → 같은 토큰으로 다시 들어오면 $1000 새 사람이 아니라 그때 돈·기록으로.
+// ponytail: 새 토큰(시크릿 창·다른 브라우저)으로 들어오면 새 사람이다. 막으려면 로그인 같은 진짜 신원이 필요하다.
+const RC_AUTO = 8000; // 📴인 사람 대신 결정을 내리는 주기
+const RC_EMPTY = 120000; // 방 인원 전원이 📴인 채로 이만큼 지나면 방을 치운다
+const rcTokens = new Map(); // token -> { room, id }
+// 게임별 자동 처리 (room, p): 📴인 사람에게 RC_AUTO마다 불린다. 결정할 게 없으면 아무것도 안 해야 하고, 처리했으면 그 게임의 진행 체크까지 부른다. 새 게임은 한 줄 추가.
+const rcAutoAct = {
+  blackjack: (room, p) => bjAction(room, p, "stand"),
+  penguin: (room, p) => {
+    if (room.phase !== "playing" || !p.pg || p.pg.state !== "playing") return;
+    if (p.pg.step) return pgAction(room, p, "stop"); // 한 번이라도 뛰었으면 거기서 챙긴다
+    p.money += p.bets[0] || 0; p.bets = {}; p.pg.state = "out"; // 안 뛰었으면 판돈 돌려주고 구경
+    broadcastRoom(room);
+    pgCheckDone(room);
+  },
+};
+// 복귀할 때 부르는 훅 (room, ws, p): 게임별로 본인에게만 보내던 비공개 정보를 다시 보낸다. 새 게임이 rcResync.push(...)로 붙인다.
+const rcResync = [];
+
+function rcHello(ws, tok) {
+  if (ws.room || typeof tok !== "string" || !/^[\w-]{8,64}$/.test(tok)) return;
+  ws.rcToken = tok; // 복귀에 실패해도 이 연결로 create/join 하면 이 토큰으로 묶인다
+  const e = rcTokens.get(tok), room = e && rooms.get(e.room.code) === e.room ? e.room : null;
+  const old = room && [...room.players.keys()].find((w) => room.players.get(w).id === e.id);
+  if (!old) { rcTokens.delete(tok); return send(ws, { type: "rcFail" }); } // 모르는 토큰 / 방이 사라짐 → 클라이언트는 타이틀로
+  const p = room.players.get(old);
+  clearInterval(old.rcTimer);
+  old.room = null; // 같은 토큰의 다른 탭이 아직 붙어 있으면 끊는다 (room을 먼저 비워서 close 처리가 자리를 건드리지 않게)
+  if (old.readyState === old.OPEN) { send(old, { type: "rcKicked" }); old.close(); }
+  const list = [...room.players];
+  room.players.clear();
+  for (const [w, q] of list) room.players.set(w === old ? ws : w, q); // 키만 바꾸고 순서 유지 (첫 번째 = 방장)
+  ws.id = p.id;
+  ws.room = room;
+  if (p.rcAway) sys(room, "🔌 " + p.name + " 돌아옴");
+  p.rcAway = false;
+  send(ws, { type: "joined", playerId: p.id });
+  broadcastRoom(room);
+  if (room.phase === "racing") send(ws, raceMsg(room));
+  for (const f of rcResync) f(room, ws, p);
+}
+
+function rcAway(ws) {
+  const room = ws.room, p = room && room.players.get(ws);
+  if (!p || !ws.rcToken) return; // 토큰 없는 연결은 예전처럼 leaveRoom이 치운다
+  ws.room = null; // 자리는 남긴다 → 바로 뒤에 도는 leaveRoom(ws)은 할 일이 없다
+  p.rcAway = true;
+  ws.rcTimer = setInterval(() => rcAutoAct[room.game]?.(room, p), RC_AUTO);
+  if (room.phase === "lobby") rcHostFix(room);
+  sys(room, "📴 " + p.name + " 연결 끊김 — 돌아오면 그대로 이어서");
+  broadcastRoom(room);
+  checkAllReady(room);
+  checkNightReady(room);
+  checkVoteReady(room);
+  rcCheckEmpty(room);
+}
+
+// 대기실에서 방장이 📴면 아무도 시작을 못 한다 → 끊긴 사람은 순서 맨 뒤로 (돌아와도 그 자리)
+function rcHostFix(room) {
+  for (const [w, q] of [...room.players]) if (q.rcAway) { room.players.delete(w); room.players.set(w, q); }
+}
+
+function rcCheckEmpty(room) {
+  clearTimeout(room.rcEmpty);
+  if ([...room.players.values()].every((p) => p.rcAway)) room.rcEmpty = setTimeout(() => rcDrop(room), RC_EMPTY);
+}
+
+function rcDrop(room) {
+  if (rooms.get(room.code) !== room || [...room.players.values()].some((p) => !p.rcAway)) return; // 그새 누가 돌아왔거나 들어왔으면 그대로
+  clearTimeout(room.timer);
+  for (const w of room.players.keys()) clearInterval(w.rcTimer);
+  for (const [t, e] of rcTokens) if (e.room === room) rcTokens.delete(t);
+  rooms.delete(room.code);
+  broadcastRoomList();
+}
+
+function rcLeave(ws, room, p) {
+  if (!ws.rcToken) return;
+  rcTokens.delete(ws.rcToken);
+  room.rcLeft.set(ws.rcToken, { day: room.day, money: p.money, dayStart: p.dayStart, history: p.history, mining: p.mining, begged: p.begged, look: p.look, color: p.color });
+}
+
+// joinRoom이 새 자리를 만든 직후: 토큰을 이 자리에 묶고, 이 방에서 나갔던 사람이면 그때 돈·기록으로 되돌린다
+function rcJoin(ws, room) {
+  if (!ws.rcToken) return;
+  const p = room.players.get(ws), s = room.rcLeft.get(ws.rcToken);
+  rcTokens.set(ws.rcToken, { room, id: p.id });
+  if (!s) return;
+  room.rcLeft.delete(ws.rcToken);
+  const upto = room.phase === "night" || room.phase === "final" ? room.day : room.day - 1;
+  for (let d = s.history.length; d <= upto; d++) s.history[d] = s.money; // 없던 동안은 돈이 그대로였다
+  Object.assign(p, { money: s.money, dayStart: s.money, history: s.history, look: s.look }, s.day === room.day && { dayStart: s.dayStart, mining: s.mining, begged: s.begged });
+  if (![...room.players.values()].some((q) => q !== p && q.color === s.color)) p.color = s.color;
 }
 
 wss.on("connection", (ws) => {
@@ -763,6 +871,7 @@ wss.on("connection", (ws) => {
     try { msg = JSON.parse(raw); } catch (e) { return; }
     if (msg && typeof msg === "object") handleMessage(ws, msg);
   });
+  ws.on("close", () => rcAway(ws)); // 재접속: leaveRoom보다 먼저 등록. 자리를 남길 땐 ws.room을 비워서 아래 leaveRoom이 할 일이 없게 한다
   ws.on("close", () => leaveRoom(ws));
 });
 
@@ -967,6 +1076,72 @@ if (process.argv.includes("--check")) {
   nextNight();
   assert(hr.phase === "final", "2일 뒤엔 끝");
   delete process.env.GAME;
+
+  // 재접속: 진짜 connection 핸들러에 가짜 ws를 물린다(close 순서까지 그대로). 끊김 → 📴 자리 유지·자동 준비 → 새 연결로 복귀
+  //   → 다른 탭이 같은 토큰으로 붙으면 옛 탭은 끊김 → 블랙잭 도중 📴면 자동 스탠드 → 명시적 퇴장 후 재입장은 스냅샷 복원 → 전원 📴 2분이면 방 삭제
+  process.env.GAME = "blackjack";
+  const wire = [], tokA = crypto.randomUUID(), tokB = crypto.randomUUID();
+  const conn = (tok) => {
+    const w = Object.assign(new (require("events"))(), { readyState: 1, OPEN: 1, got: [], ping() {},
+      send(d) { wire.push(d); w.got.push(JSON.parse(d)); }, close() { if (w.readyState === 3) return; w.readyState = 3; w.emit("close"); } });
+    wss.emit("connection", w);
+    w.say = (m) => w.emit("message", JSON.stringify(m));
+    w.say({ type: "rcHello", token: tok });
+    return w;
+  };
+  const ra = conn(tokA), rb = conn(tokB);
+  assert(ra.got.at(-1).type === "rcFail" && !ra.room, "처음 보는 토큰은 복귀 실패 → 타이틀");
+  ra.say({ type: "create", name: "RA" });
+  const rr = ra.room, RA = rr.players.get(ra);
+  rb.say({ type: "join", id: rr.code, name: "RB" });
+  const RB = rr.players.get(rb), bid = RB.id;
+  ra.say({ type: "start" });
+  ra.say({ type: "bet", i: 0, amount: 100 });
+  rb.say({ type: "bet", i: 0, amount: 50 });
+  rr.bj.deck = ["K2", "70", "91", "63", "50", "62", "K0"]; // 딜러 K0,62 / A 50,63 / B 91,70 → 둘 다 고민 중
+  rb.close();
+  assert(RB.rcAway && RB.ready && rr.players.size === 2 && rr.players.get(rb) === RB && !rb.room, "끊겨도 자리·베팅 유지 + 자동 준비");
+  ra.say({ type: "ready", v: true });
+  assert(rr.phase === "playing" && RB.bj.state !== "out", "📴인 B 때문에 판이 안 멈춘다");
+  const rb2 = conn(tokB);
+  assert(rb2.room === rr && rb2.id === bid && rr.players.get(rb2) === RB && !RB.rcAway && RB.money === 950 && RB.bets[0] === 50, "같은 자리·돈·베팅으로 복귀");
+  assert(rb2.got.some((m) => m.type === "joined" && m.playerId === bid) && [...rr.players.keys()][1] === rb2, "Map 순서 유지");
+  ra.close();
+  const ra2 = conn(tokA); // 방장이 새로고침해도 방장 그대로
+  assert([...rr.players.keys()][0] === ra2 && hostOf(rr) === RA && !RA.rcAway, "방장 자리 유지");
+  const rb3 = conn(tokB); // 다른 탭
+  assert(rb2.readyState === 3 && rb2.got.at(-1).type === "rcKicked" && rr.players.get(rb3) === RB && !RB.rcAway && rr.players.size === 2, "옛 탭은 끊고 새 탭으로");
+  rb3.close();
+  assert(RB.rcAway && RB.bj.state === "playing");
+  rb3.rcTimer._onTimeout(); // RC_AUTO 콜백을 직접 부른다
+  assert(RB.bj.state === "stand", "📴면 자동 스탠드");
+  ra2.say({ type: "bj", a: "stand" });
+  while (rr.phase === "playing") { clearTimeout(rr.timer); bjDealerStep(rr); }
+  clearTimeout(rr.timer);
+  const rb4 = conn(tokB);
+  RB.money = 0; RB.history[1] = 123; // 파산한 채로 나갔다 들어오기
+  rb4.say({ type: "leave" });
+  assert(rr.players.size === 1 && !rb4.room && !rcTokens.has(tokB));
+  const rb5 = conn(tokB); // 새로고침 = 새 연결
+  assert(rb5.got.at(-1).type === "rcFail");
+  rb5.say({ type: "join", id: rr.code, name: "RB" });
+  const RB2 = rr.players.get(rb5);
+  assert(RB2 !== RB && RB2.money === 0 && RB2.history[1] === 123 && RB2.color === RB.color, "나갔다 오면 $" + START_MONEY + "이 아니라 그때 돈·기록");
+  for (const tok of [tokA, tokB]) assert(!wire.some((d) => d.includes(tok)), "토큰은 어떤 메시지에도 안 나간다");
+  ra2.close(); rb5.close();
+  assert(rooms.has(rr.code) && rr.rcEmpty, "전원 📴 → 2분 타이머");
+  rr.rcEmpty._onTimeout();
+  assert(!rooms.has(rr.code) && !rcTokens.has(tokA), "2분 지나면 방 삭제");
+  for (const w of rr.players.keys()) clearInterval(w.rcTimer);
+  const la = conn(crypto.randomUUID()), lb = conn(crypto.randomUUID()); // 대기실에서 방장이 📴면 다음 사람이 방장
+  la.say({ type: "create", name: "LA" });
+  lb.say({ type: "join", id: la.room.code, name: "LB" });
+  const lr = la.room;
+  la.close();
+  assert(hostOf(lr) === lr.players.get(lb) && lr.players.size === 2);
+  lb.say({ type: "leave" });
+  clearTimeout(lr.rcEmpty); rcDrop(lr);
+  assert(!rooms.has(lr.code), "남은 사람이 전부 📴면 그 방도 치운다");
   console.log("OK");
   process.exit(0);
 }

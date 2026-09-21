@@ -191,6 +191,8 @@
   #toast{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:10;background:#161320;border:2px solid var(--gold);color:var(--ink);border-radius:999px;padding:10px 18px;font-weight:600;font-size:14px;max-width:90vw;pointer-events:none;transition:opacity .25s ease}
   #toast.err{border-color:var(--bad)}
   #toast.off{opacity:0}
+  #rc-banner{position:fixed;top:calc(56px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);z-index:12;background:#161320;border:2px solid var(--bad);color:var(--ink);border-radius:999px;padding:8px 16px;font-weight:700;font-size:13px;white-space:nowrap;pointer-events:none;animation:rc-blink 1.2s ease-in-out infinite} /* 재접속 */
+  @keyframes rc-blink{50%{opacity:.5}}
 
   /* 게임 투표: 어두운 남색 벌집 배경 + 세로 카드 3장 + 무작위 바 */
   #screen-vote{justify-content:flex-start;gap:12px;padding:18px 16px 24px;
@@ -351,6 +353,7 @@
   <button id="btn-chat" aria-label="채팅 열기/닫기">💬</button>
   <button id="btn-mute" aria-label="소리 켜기/끄기">🔊</button>
   <div id="toast" class="off"></div>
+  <div id="rc-banner" hidden>📴 재연결 중…</div>
 </div>
 
 <script>
@@ -721,6 +724,30 @@
     if(ms) overlayTimer = setTimeout(() => { overlay.textContent = ""; }, ms);
   }
 
+  // ---------- 재접속 ----------
+  // 토큰 = 이 브라우저의 신분증. 접속할 때마다 rcHello로 보내면 서버가 끊겼던 자리(돈·베팅 그대로)에 다시 앉혀 준다 → 새로고침해도 복귀.
+  // 끊겨도 화면은 그대로 두고 "재연결 중…" 배너 + 1s, 2s, 4s… 최대 10s 간격으로 다시 붙는다. 서버가 모른다고 하면(rcFail) 그때 타이틀로.
+  const rcNewToken = () => crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2,"0")).join(""); // randomUUID는 https/localhost에서만 있다(같은 와이파이 http://IP 접속 대비)
+  let rcToken = null, rcWait = 1000, rcKicked = false;
+  try{ rcToken = localStorage.getItem("gp-token") || rcNewToken(); localStorage.setItem("gp-token", rcToken); }catch(e){}
+  rcToken = rcToken || rcNewToken(); // 저장소가 막힌 브라우저: 이 탭이 살아 있는 동안만
+  const rcBanner = $("rc-banner");
+  function rcRetry(){
+    connBanner.textContent = rcKicked ? "다른 창에서 이어서 하는 중 · 새로고침하면 이쪽으로" : "연결이 끊겼어요. 다시 연결하는 중…";
+    if(rcKicked) return;
+    rcBanner.hidden = !room;
+    setTimeout(connect, rcWait);
+    rcWait = Math.min(rcWait*2, 10000);
+  }
+  function rcOnMessage(msg){ // true면 여기서 끝
+    if(msg.type === "joined"){ rcBanner.hidden = true; if(room && msg.playerId === myId) return true; } // 같은 페이지에서 다시 붙은 거면 채팅은 그대로 둔다
+    if(msg.type === "rcFail"){ rcBanner.hidden = true; if(room){ room = null; setInRoom(false); show("home"); toast("방이 사라졌어요", true); } return true; } // 처음 접속이면 조용히 타이틀
+    if(msg.type !== "rcKicked") return false;
+    rcKicked = true; room = null; setInRoom(false); show("home");
+    toast("다른 창에서 이 자리로 접속했어요", true);
+    return true;
+  }
+
   // ---------- websocket ----------
   let ws = null, myId = null, room = null, race = null, selected = -1;
   let clocks = [], particles = [], cam = -130;
@@ -740,17 +767,19 @@
       connBanner.className = "conn-banner err";
       btnCreate.disabled = true;
       roomList.innerHTML = "";
-      if(room){ room = null; setInRoom(false); show("home"); toast("서버와 연결이 끊겼어요", true); }
     });
     ws.addEventListener("message", (ev) => {
       let msg;
       try{ msg = JSON.parse(ev.data); }catch(e){ return; }
       handleServerMessage(msg);
     });
+    ws.addEventListener("open", () => { rcWait = 1000; sendMsg({type:"rcHello", token:rcToken}); }); // 재접속: 이전 자리가 살아 있으면 바로 복귀
+    ws.addEventListener("close", rcRetry);
   }
   function sendMsg(obj){ if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
   function handleServerMessage(msg){
+    if(rcOnMessage(msg)) return; // 재접속
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -777,6 +806,7 @@
   const me = () => room.players.find((p) => p.id === myId);
 
   function onRoom(r){
+    for(const p of r.players) if(p.rcAway) p.name = "📴" + p.name; // 재접속: 끊긴 사람은 이름 앞에 📴 (HUD·대기실·투표·캔버스 이름표 전부)
     const prev = room ? room.phase : null;
     room = r;
     setInRoom(true);

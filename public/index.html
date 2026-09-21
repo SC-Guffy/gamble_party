@@ -174,6 +174,20 @@
   #btn-hit{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stand{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important} #btn-double{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
   :is(#bj-actions,#pg-actions) button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
   #bj-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  /* 인디언 포커: 칩 대신 참가/구경 토글, 결정 단계엔 콜/다이 + 남은 시간 막대 */
+  #panel-bet.ip-on #chips{display:none}
+  #ip-join,#ip-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  :is(#ip-join,#ip-actions) button{font-family:var(--font-display);font-size:13px;border:none;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
+  :is(#ip-join,#ip-actions) button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
+  :is(#ip-join,#ip-actions) button:disabled{opacity:.35;cursor:not-allowed}
+  #ip-join button{padding:11px 6px;font-size:11px;background:var(--panel);color:var(--ink-dim);border:2px solid var(--panel-edge)}
+  #ip-join button.ip-sel{background:var(--gold);color:#161320;border-color:var(--gold-shade);opacity:1}
+  #ip-call{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #ip-die{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important}
+  #ip-actions button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
+  #ip-actions button.ip-sel:disabled{opacity:1;outline:3px solid #fff}
+  #ip-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink);line-height:1.5}
+  #ip-bar{height:8px;border-radius:4px;background:var(--panel-edge);overflow:hidden}
+  #ip-bar i{display:block;height:100%;background:var(--gold);transform-origin:left}
   #night-title,#final-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
   .mk{font-size:11px;flex:none}
@@ -290,6 +304,7 @@
         <div id="dice-board" hidden></div>
         <div id="bet-actions">
         <div id="bet-hint"></div>
+        <div id="ip-join" hidden><button id="ip-in">참가<small></small></button><button id="ip-out">구경<small>이번 판은 쉬기</small></button></div>
         <div id="chips">
           <button class="chip" data-amt="10">+$10</button>
           <button class="chip" data-amt="50">+$50</button>
@@ -314,6 +329,14 @@
         <div id="pg-actions">
           <button id="btn-go">더 갈래! 🐧<small></small></button>
           <button id="btn-stop">멈출래 ✋<small></small></button>
+        </div>
+      </div>
+      <div id="ip-panel" hidden>
+        <div id="ip-hint"></div>
+        <div id="ip-bar"><i></i></div>
+        <div id="ip-actions">
+          <button id="ip-call">콜 ✊<small></small></button>
+          <button id="ip-die">다이 🏳️<small>참가비 포기 (D)</small></button>
         </div>
       </div>
       <div id="panel-race" hidden><div class="rows" id="race-rows"></div></div>
@@ -738,6 +761,7 @@
   function sendMsg(obj){ if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
   function handleServerMessage(msg){
+    if(msg.type === "ipCards"){ ipSeen = msg.cards; if(room && room.ip) renderIp(); return; } // 인디언 포커: 나한테만 오는 남들 카드
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -773,6 +797,7 @@
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
+    const ip = r.game === "indian";
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
@@ -782,6 +807,8 @@
       if(dice){ diceSnap = {}; buildDiceBoard(); }
       pgVis = {};
     }
+    if(ip && r.phase === "betting" && prev !== "betting"){ ipSeen = {}; ipVis = {}; ipMine = null; ipRevealAt = 0; }
+    if(ip && r.phase === "ipDecide"){ ipEnd = performance.now()+r.ip.left; if(prev !== "ipDecide"){ ipSpan = r.ip.left; ipBeep = 0; } }
     if(dice && !$("dice-board").children.length) buildDiceBoard(); // 도중 입장
     if(r.entrants && clocks.length !== r.entrants.length) clocks = r.entrants.map(() => Math.random());
     // 주사위는 굴리는 중/결과 때도 베팅판을 그대로 보여준다(어디가 맞았는지 불이 들어온다). 칩·준비 버튼만 숨김
@@ -789,14 +816,24 @@
     $("bet-actions").hidden = dice && r.phase !== "betting";
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
+    $("ip-panel").hidden = !ip || (r.phase !== "ipDecide" && r.phase !== "ipReveal");
+    $("ip-join").hidden = !ip;
+    $("panel-bet").classList.toggle("ip-on", ip);
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+      indian: renderIp,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -854,6 +891,7 @@
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
+    if(room.ip && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 인디언 포커 " + room.ip.round + "/" + room.ip.rounds + "판";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -987,6 +1025,8 @@
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
     $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.ip) $("result-next").textContent = room.ip.round < room.ip.rounds ? "곧 다음 판이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.ip) return ipResult(res, mine);
     if(room.pg){
       $("result-title").textContent = "🐧 빙산 건너기 결과";
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1198,11 +1238,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1643,6 +1683,131 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 인디언 포커 ----------
+  // 각자 이마에 카드 한 장: 남의 카드는 보이는데 내 카드만 "?". 남들 카드는 서버가 나한테만 따로(ipCards) 보내 주고,
+  // 내 카드는 공개(room.ip.cards) 때 처음 온다. 누가 콜했는지도 그때까지는 모른다(돈도 정산 때 빠진다).
+  let ipSeen = {}, ipVis = {}, ipMine = null, ipEnd = 0, ipSpan = 1, ipBeep = 0, ipRevealAt = 0; // ipSeen = 내가 볼 수 있는 카드 {id: 1~10}, ipVis = 좌석별 연출 상태, ipMine = 내가 고른 것(서버는 공개 전까지 아무에게도 안 알려준다)
+  const ipRank = (n) => n === 1 ? "A" : String(n);
+  const ipNames = (cards) => room.players.filter((p) => cards[p.id]).map((p) => p.name + " " + ipRank(cards[p.id])).join(", ") || "…";
+  function renderIp(){
+    const my = me(), I = room.ip, cap = room.cap, betting = room.phase === "betting", joined = !!my.bets[0], locked = !betting || my.ready || my.mining;
+    if(my.mining) $("ip-join").hidden = true;
+    $("ip-in").disabled = locked || (!joined && my.money < cap); $("ip-out").disabled = locked;
+    $("ip-in").classList.toggle("ip-sel", joined); $("ip-out").classList.toggle("ip-sel", !joined);
+    $("ip-in").querySelector("small").textContent = !joined && my.money < cap ? "돈이 모자라요 ($" + cap + ")" : "참가비 $" + cap;
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : joined ? "카드 받기 (준비 완료)" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🙈 " + I.round + "/" + I.rounds + "번째 판 · 참가비 $" + cap + ", 콜하면 $" + cap + " 더 · 내 카드만 못 봐요! 콜한 사람 중 제일 높은 카드(A=1 < 10)가 판돈의 95%를 가져가요. 10 들고 다이하면 벌금 $" + cap;
+    const inHand = I.ids.includes(myId), done = I.done.includes(myId), can = room.phase === "ipDecide" && inHand && !done;
+    $("ip-call").disabled = !can || my.money < cap; $("ip-die").disabled = !can;
+    $("ip-call").classList.toggle("ip-sel", done && ipMine === "call"); $("ip-die").classList.toggle("ip-sel", done && ipMine === "die");
+    $("ip-call").querySelector("small").textContent = my.money < cap ? "돈이 모자라요…" : "+$" + cap + " 더 내고 승부 (C)";
+    $("ip-hint").textContent = I.cards ? "카드 공개!" + (inHand ? " 내 카드는 " + ipRank(I.cards[myId]) + " · " + (I.calls[myId] ? "콜 ✊" : "다이 🏳️") : "") :
+      !inHand ? "구경 중 — " + ipNames(ipSeen) + " (훈수는 채팅으로 😈)" :
+      done ? (ipMine === "call" ? "✊ 콜! " : "🏳️ 다이. ") + "다른 사람을 기다리는 중… (" + (I.ids.length-I.done.length) + "명 남음)" :
+      "남들 카드: " + ipNames(ipSeen) + " — 내 카드는 몰라요" + (my.money < cap ? " (돈이 모자라 콜 불가)" : "");
+  }
+  $("ip-in").addEventListener("click", () => { ensureAudio(); sfxChip(); sendMsg({type:"ipJoin", v:true}); });
+  $("ip-out").addEventListener("click", () => { ensureAudio(); sendMsg({type:"ipJoin", v:false}); });
+  const ipAct = (a) => { ensureAudio(); ipMine = a; sendMsg({type:"ipAct", a:a}); if(a === "call") sfxChip(); };
+  $("ip-call").addEventListener("click", () => ipAct("call"));
+  $("ip-die").addEventListener("click", () => ipAct("die"));
+  window.addEventListener("keydown", (e) => { // C = 콜, D = 다이 (채팅 입력 중엔 무시). 한글 자판에서도 되게 e.code 먼저, 없으면 e.key
+    if(!room || !room.ip || room.phase !== "ipDecide" || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const keys = {KeyC:"ip-call", KeyD:"ip-die", c:"ip-call", d:"ip-die"}, b = keys[e.code] || keys[e.key.toLowerCase()];
+    if(b && !$(b).disabled) $(b).click();
+  });
+  function ipResult(res, mine){
+    const names = room.players.filter((p) => res.winners.includes(p.id)).map((p) => p.name).join(" · ");
+    $("result-title").textContent = res.winners.length ? "🙈 " + names + " 승리! 판돈 $" + res.pot + " → $" + Math.floor(res.pot*0.95/res.winners.length) + (res.winners.length > 1 ? "씩" : "") :
+      Object.keys(res.cards).length ? "아무도 콜하지 않았어요 — 참가비 환불" : "참가자가 모자라 무효 — 참가비 환불";
+    $("result-rows").innerHTML = room.players.map((p) => {
+      const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, c = res.cards[p.id];
+      const tag = c ? "카드 " + ipRank(c) + " · " + (res.calls[p.id] ? "콜" : "다이") + (res.penalties[p.id] ? " · 벌금 $" + res.penalties[p.id] : "") : "환불";
+      return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+        (o ? '<span class="tag'+(res.penalties[p.id] ? " bad" : "")+'">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+    }).join("");
+    if(mine && mine.win > mine.bet){ sfxWin(); confetti(mine.win > mine.bet*2 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+  }
+  // 이마에 붙인 카드 한 장. (cx, by) = 카드 아래쪽 가운데, n = null이면 뒷면 "?"(1은 A), squash = 뒤집히는 중의 가로 비율
+  function ipCard(g, cx, by, ch, n, su, squash, glow){
+    const cw = ch*0.7;
+    g.save(); g.translate(cx, by-ch/2); g.scale(squash == null ? 1 : Math.max(0.04, squash), 1);
+    if(glow){ g.fillStyle = "rgba(255,221,122,"+(0.6+0.3*S(performance.now()/110))+")"; rr(g, -cw/2-5, -ch/2-5, cw+10, ch+10, cw*0.22); g.fill(); }
+    drawCard(g, -cw/2, -ch/2, cw, ch, n ? ipRank(n)+su : null);
+    if(!n){ g.fillStyle = "#b03a48"; g.beginPath(); g.arc(0, 1, ch*0.25, 0, T); g.fill(); g.fillStyle = "#ffdd7a"; g.font = "800 "+ch*0.48+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("?", 0, 2); }
+    g.restore();
+  }
+  // 장면: 블랙잭과 같은 카지노 톤의 포커 테이블. 가운데 판돈, 아래에 플레이어들(이마에 카드).
+  // 공개(room.ip.cards가 오는 순간)부터: 몰랐던 카드가 뒤집히고 → 좌석 순서대로 콜/다이 도장 → 정산되면 승자에게 동전이 날아간다.
+  function drawIndian(ts, dt){
+    const g = ctx, now = ts/1000, I = room.ip, n = room.players.length, cap = room.cap, res = room.phase === "result" && room.result;
+    const wall = g.createLinearGradient(0,0,0,H); wall.addColorStop(0,"#3b1e44"); wall.addColorStop(1,"#170d1f");
+    g.fillStyle = wall; g.fillRect(0,0,W,H);
+    for(let i=0;i<5;i++){ g.fillStyle = "rgba(255,221,122,"+(0.10+0.05*S(now*2+i))+")"; g.beginPath(); g.arc(W*(0.1+0.2*i), 0, H*0.16, 0, T); g.fill(); } // 천장 조명
+    const ty = H*0.2, py = H*0.31, pu = clamp(H/56, 2.8, 5), ch = clamp(H*0.2, 44, 80), cw = ch*0.7;
+    g.fillStyle = "#5a3820"; rr(g, W*0.02-6, ty-6, W*0.96+12, H, 60); g.fill();
+    g.fillStyle = "#1f7a4d"; rr(g, W*0.02, ty, W*0.96, H, 54); g.fill();
+    g.fillStyle = "rgba(255,255,255,.2)"; g.textAlign = "center"; g.textBaseline = "middle"; g.font = "800 "+clamp(H*0.035,9,14)+"px Rubik, sans-serif";
+    g.fillText("INDIAN POKER  ·  HIGHEST CALL TAKES THE POT", W/2, ty+H*0.045);
+    if(I.cards && !ipRevealAt){ ipRevealAt = now; tone(700,0.08,"triangle",0.08,1100); }
+    const rt = I.cards ? now-ipRevealAt : -1, stampAt = (k) => 0.8+k*0.35; // rt = 공개 후 흐른 시간, stampAt = k번째 참가자의 도장이 찍히는 시각
+    const anyCall = I.calls && Object.values(I.calls).some(Boolean);
+
+    // 판돈: 공개 전엔 참가비만 보인다(콜은 도장이 찍힐 때마다 얹힌다)
+    const pot = res ? res.pot : room.phase === "betting" ? room.players.reduce((a,p) => a+(p.bets[0] || 0), 0) :
+      cap*(I.ids.length+I.ids.filter((id,k) => I.calls && I.calls[id] && rt >= stampAt(k)).length);
+    for(let k=0, m=res ? 0 : clamp(Math.ceil(pot/cap), 0, 12); k<m; k++){
+      g.fillStyle = k%2 ? "#ffdd7a" : "#e8443a"; g.beginPath(); g.ellipse(W/2+(k%3-1)*cw*0.72, py-Math.floor(k/3)*4, cw*0.3, cw*0.13, 0, 0, T); g.fill(); g.strokeStyle = "rgba(0,0,0,.35)"; g.lineWidth = 1; g.stroke();
+    }
+    pill(g, W/2, py+cw*0.13+13, pot ? "판돈 $"+pot : res ? "환불" : "판돈 $0", "rgba(11,10,19,.8)", "#ffdd7a", 12);
+    if(room.phase === "ipDecide"){ // 남은 시간 (패널의 막대도 여기서 같이 줄인다)
+      const left = Math.max(0, (ipEnd-performance.now())/1000), sec = Math.ceil(left);
+      pill(g, W/2, H*0.09, "⏱ "+sec+"초", sec <= 5 ? "#ff5d72" : "rgba(11,10,19,.8)", "#fff", clamp(H*0.05, 12, 18));
+      $("ip-bar").firstChild.style.transform = "scaleX("+clamp(left*1000/ipSpan, 0, 1)+")";
+      $("ip-bar").firstChild.style.background = sec <= 5 ? "var(--bad)" : "";
+      if(sec <= 5 && sec > 0 && sec !== ipBeep){ ipBeep = sec; sfxBeep(); }
+    } else $("ip-bar").firstChild.style.transform = "scaleX(0)";
+
+    room.players.forEach((p, i) => {
+      const cx = W*(i+0.5)/n, k = I.ids.indexOf(p.id), inHand = k >= 0, pay = res && res.payouts[p.id], v = ipVis[p.id] || (ipVis[p.id] = {});
+      const call = I.calls && I.calls[p.id], stamped = inHand && rt >= stampAt(k), won = !!res && res.winners.includes(p.id);
+      const fined = res ? res.penalties[p.id] : stamped && !call && anyCall && I.cards[p.id] === 10;
+      const pose = p.mining ? "mine" : pay ? (pay.win > pay.bet ? "cheer" : pay.win < pay.bet ? "sad" : "idle") : stamped && !call ? "sad" : "idle";
+      if(p.id === myId){ const sw = Math.min(W/n*0.92, cw*3.4); g.fillStyle = "rgba(255,221,122,.13)"; rr(g, cx-sw/2, H-3-30*pu, sw, 30*pu+20, 14); g.fill(); }
+      drawPerson(g, p.look, cx, H-3, pu, pose, now, i*1.7);
+      let top = H-3-21*pu;
+      if(inHand){ // 이마의 카드: 판 가운데에서 날아와 붙는다. 몰랐던 카드(= 내 카드)는 공개 때 뒤집힌다
+        if(v.dealAt == null){ v.dealAt = now+k*0.15; tone(1500,0.03,"square",0.04,900,k*0.15); }
+        const e = 1-Math.pow(1-clamp((now-v.dealAt)/0.3, 0, 1), 3), lift = pose === "cheer" ? Math.abs(S((now+i*1.7)*7))*3 : 0, by = H-3-(13.6+lift-(pose === "sad" ? 0.8 : 0))*pu;
+        const flip = I.cards && !ipSeen[p.id] ? clamp(rt/0.5, 0, 1) : null, face = I.cards ? (flip != null && flip < 0.5 ? null : I.cards[p.id]) : ipSeen[p.id] || null;
+        if(now >= v.dealAt) ipCard(g, W/2+(cx-W/2)*e, py+(by-py)*e, ch, face, i%4, flip == null ? null : Math.abs(Math.cos(flip*PI)), won);
+        top = by-ch-6;
+      }
+      const chest = H-3-7.5*pu, feet = H-3-2.4*pu; // 상태 알약은 다리 쪽에(몸통을 안 가리게), 콜/다이 도장은 가슴에
+      if(room.phase === "betting"){ if(p.bets[0]) pill(g, cx, feet, "참가 $"+p.bets[0], "#ffdd7a", "#161320", 11); else if(p.ready) pill(g, cx, feet, "구경", "rgba(11,10,19,.8)", "#fff", 11); }
+      else if(!inHand){ if(!p.mining) pill(g, cx, feet, "구경 중", "rgba(11,10,19,.8)", "#fff", 11); }
+      else if(!I.cards){ if(I.done.includes(p.id)) pill(g, cx, feet, "결정 완료 ✔", "#7bd88f", "#161320", 11); else pill(g, cx, feet+S(now*5+i)*2, "고민 중…", "rgba(11,10,19,.8)", "#fff", 11); }
+      else if(stamped){
+        if(!v.stamped){ v.stamped = 1; tone(call ? 880 : 220, 0.14, "square", 0.09, call ? 1320 : 140); if(call) sfxChip();
+          if(fined){ tone(200,0.4,"sawtooth",0.1,60); burst(18, null, chest, (dx,dy) => ({x:cx, color:R()<0.5?"#ff5d72":"#ffdd7a", vx:dx*140, vy:dy*140-40, g:300, life:0.7, w:5+R()*4, spin:8})); } }
+        const pop = clamp((rt-stampAt(k))/0.15, 0, 1), fs = clamp(ch*0.36, 15, 26)*(1.7-0.7*pop), txt = call ? "콜!" : "다이";
+        g.save(); g.translate(cx, chest); g.rotate(-0.1); g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 5; g.lineJoin = "round"; g.strokeStyle = "#161320"; g.fillStyle = call ? "#7bd88f" : "#c9c3b9";
+        g.strokeText(txt,0,0); g.fillText(txt,0,0); g.restore();
+        if(fined) pill(g, cx, feet, res ? "벌금 −$"+fined : "10인데?! 벌금!", "#ff5d72", "#fff", 11);
+      }
+      if(won && !v.paid){ v.paid = 1; if(p.id === myId) sfxCoin(); for(let c=0;c<16;c++) emit(null, py, {x:W/2+(R()-0.5)*40, color:c%2?"#ffdd7a":"#e8ac3a", vx:(cx-W/2)*1.1+(R()-0.5)*60, vy:(chest-py)*1.1+R()*30, life:0.85, w:8, h:5, spin:9}); } // 판돈이 승자에게 날아간다
+      const lines = [["$"+p.money, "#ffdd7a"], [p.name, PCOL[p.color]]];
+      if(pay) lines.unshift([(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"]);
+      personLabel(g, p, cx, top, 11, lines.reverse());
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1873,7 +2038,8 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
+    indian:    {name:"인디언 포커", icon:"🙈", sub:"하루 3판 · 내 카드만 못 본다"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
   let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
@@ -1919,6 +2085,20 @@
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
+    if(key === "indian"){ // 테이블에 앉은 셋, 이마에 카드 — 가운데 사람 카드만 "?"
+      const wall = g.createLinearGradient(0,0,0,h); wall.addColorStop(0,"#3b1e44"); wall.addColorStop(1,"#170d1f");
+      g.fillStyle = wall; g.fillRect(0,0,w,h);
+      for(let i=0;i<3;i++){ g.fillStyle = "rgba(255,221,122,"+(0.12+0.05*S(now*2+i))+")"; g.beginPath(); g.arc(w*(0.15+0.35*i), 0, h*0.12, 0, T); g.fill(); }
+      const u = h/80, fy = h*0.5;
+      [[3,0,2,1,0],[0,1,0,0,1],[5,2,4,2,2]].forEach((L,i) => {
+        const cx = w*(0.2+0.3*i), look = i === 1 ? S(now*1.3) : 0; // 가운데는 남의 카드를 기웃거린다
+        drawPerson(g, {top:L[0], bottom:L[1], hair:L[2], hairColor:L[3], skin:L[4]}, cx+look*u, fy, u, "idle", now, i*1.7);
+        ipCard(g, cx+look*u, fy-13.6*u+S(now*2.2+i*1.7)*0.12*u, h*0.16, [7,null,3][i], i);
+      });
+      g.fillStyle = "#5a3820"; rr(g, -20, h*0.44-5, w+40, h, 50); g.fill();
+      g.fillStyle = "#1f7a4d"; rr(g, -16, h*0.44, w+32, h, 46); g.fill();
+      return;
+    }
     if(key === "derby"){
       const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
       sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
@@ -2020,6 +2200,7 @@
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
     if(room.game === "penguin") return drawPenguinGame(ts, dt);
+    if(room.game === "indian") return drawIndian(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

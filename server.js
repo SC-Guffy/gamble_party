@@ -661,6 +661,16 @@ function leaveRoom(ws) {
   if (room.pg) pgCheckDone(room);
 }
 
+// ---------- 이모티콘 리액션 ----------
+// 😂 💸 😡 🙏 🔥 👏 😱 🤑 — 번호(0~7)만 오간다 (클라이언트 EM_LIST와 같은 순서). 채팅 로그에는 안 남긴다.
+const EM_COUNT = 8;
+const EM_GAP = 600; // 한 사람당 연타 제한(ms)
+function emReact(room, ws, me, e) {
+  if (!Number.isInteger(e) || e < 0 || e >= EM_COUNT || Date.now() - (ws.emLast || 0) < EM_GAP) return;
+  ws.emLast = Date.now();
+  broadcast(room, { type: "emReact", id: me.id, e }); // 보낸 사람도 이걸 받아서 띄운다 (순서·연타 제한이 모두에게 같게)
+}
+
 function handleMessage(ws, msg) {
   if (msg.type === "create") {
     if (ws.room) return;
@@ -680,6 +690,7 @@ function handleMessage(ws, msg) {
   if (!room) return;
   const me = room.players.get(ws);
   const canBet = room.phase === "betting" && !me.ready && !me.mining;
+  if (msg.type === "emReact") return emReact(room, ws, me, msg.e); // 이모티콘 리액션 (방 안에서만)
 
   if (msg.type === "start") {
     if (room.phase === "lobby" && me === hostOf(room)) startVote(room);
@@ -967,6 +978,23 @@ if (process.argv.includes("--check")) {
   nextNight();
   assert(hr.phase === "final", "2일 뒤엔 끝");
   delete process.env.GAME;
+
+  // 이모티콘 리액션: 방 밖·없는 번호·연타(0.6초 안)는 무시, 통과하면 방 전원에게 {type, id, e}. 채팅으로는 안 나간다
+  const emGot = [], emWs = () => ({ id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, send(d) { emGot.push(JSON.parse(d)); } });
+  const emA = emWs(), emB = emWs(), emOut = emWs();
+  handleMessage(emOut, { type: "emReact", e: 0 }); // 방 밖
+  handleMessage(emA, { type: "create", name: "EA" });
+  handleMessage(emB, { type: "join", id: emA.room.code, name: "EB" });
+  emGot.length = 0;
+  for (const e of [-1, 8, 1.5, "2", null, undefined]) handleMessage(emA, { type: "emReact", e });
+  handleMessage(emA, { type: "emReact", e: 3 });
+  handleMessage(emA, { type: "emReact", e: 4 }); // 연타
+  handleMessage(emB, { type: "emReact", e: 7 });
+  emA.emLast -= 600; // 0.6초 지남
+  handleMessage(emA, { type: "emReact", e: 0 });
+  const emMsg = (id, e) => ({ type: "emReact", id, e });
+  assert.deepStrictEqual(emGot, [emMsg(emA.id, 3), emMsg(emA.id, 3), emMsg(emB.id, 7), emMsg(emB.id, 7), emMsg(emA.id, 0), emMsg(emA.id, 0)], "이모티콘 검증/연타 제한/브로드캐스트");
+  rooms.delete(emA.room.code);
   console.log("OK");
   process.exit(0);
 }

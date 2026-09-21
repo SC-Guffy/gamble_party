@@ -174,6 +174,15 @@
   #btn-hit{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stand{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important} #btn-double{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
   :is(#bj-actions,#pg-actions) button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
   #bj-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  /* 미스터리 상자 경매: 분포표 + 나만 아는 힌트 + 밀봉 입찰 버튼(공용 칩 대신) */
+  #panel-bet:not(.au) :is(#au-board,#au-chips),#panel-bet.au #chips{display:none}
+  #au-board{display:flex;flex-direction:column;gap:6px}
+  #au-table{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+  @media (max-width:719px){ #au-table{grid-template-columns:repeat(3,1fr)} }
+  #au-table .spot{cursor:default} #au-table .spot.miss b{text-decoration:line-through}
+  #au-note{display:flex;flex-wrap:wrap;gap:6px 10px;justify-content:center;align-items:center;font-size:12.5px;color:var(--ink-dim);text-align:center}
+  #au-note b{color:#161320;background:var(--gold);border-radius:8px;padding:4px 10px;font-size:13.5px}
+  #au-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
   #night-title,#final-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
   .mk{font-size:11px;flex:none}
@@ -288,6 +297,7 @@
       <div id="panel-bet">
         <div id="cards"></div>
         <div id="dice-board" hidden></div>
+        <div id="au-board"><div id="au-table"></div><div id="au-note"></div></div>
         <div id="bet-actions">
         <div id="bet-hint"></div>
         <div id="chips">
@@ -297,6 +307,13 @@
           <button class="chip" data-amt="500">+$500</button>
           <button class="chip" data-amt="all">MAX</button>
           <button class="chip clear" data-amt="clear">초기화</button>
+        </div>
+        <div id="au-chips">
+          <button class="chip" data-au="10">+$10</button>
+          <button class="chip" data-au="50">+$50</button>
+          <button class="chip" data-au="100">+$100</button>
+          <button class="chip" data-au="all">MAX</button>
+          <button class="chip clear" data-au="clear">초기화</button>
         </div>
         <div class="btn-row"><button class="btn" id="btn-ready">준비 완료</button></div>
         </div>
@@ -738,6 +755,7 @@
   function sendMsg(obj){ if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
   function handleServerMessage(msg){
+    if(msg.type === "auMe"){ auMe = msg; if(room && room.au) renderAu(); return; } // 경매: 내 비밀 힌트 · 내 입찰액 (나한테만 온다)
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -773,7 +791,9 @@
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
+    const au = r.game === "auction";
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
+    if(r.phase === "auReveal" && prev !== "auReveal"){ auT0 = performance.now()/1000; auStep = 0; setOverlay("입찰 마감!", 1000); sfxGo(); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
       cardSeen = {}; bjPrev = {}; lastDeal = 0; revealAt = 0;
@@ -787,16 +807,25 @@
     // 주사위는 굴리는 중/결과 때도 베팅판을 그대로 보여준다(어디가 맞았는지 불이 들어온다). 칩·준비 버튼만 숨김
     $("panel-bet").hidden = !(r.phase === "betting" || r.phase === "countdown" || (dice && (r.phase === "rolling" || r.phase === "result")));
     $("bet-actions").hidden = dice && r.phase !== "betting";
+    if(au){ $("panel-bet").hidden = r.phase !== "betting" && r.phase !== "auReveal"; $("bet-actions").hidden = r.phase !== "betting"; } // 공개 중에도 분포표는 보여준다
+    $("panel-bet").classList.toggle("au", au);
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+      auction: renderAu,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -854,6 +883,7 @@
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
+    if(room.au && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 경매 " + room.au.round + "/" + room.au.rounds + "판";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -987,6 +1017,17 @@
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
     $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.au) $("result-next").textContent = room.au.round < room.au.rounds ? "곧 다음 상자가 나와요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.au){
+      const w = room.players.find((p) => p.id === res.winner), net = res.value-res.price, bidOf = {};
+      res.bids.forEach((b) => { bidOf[b.id] = b.bid; });
+      $("result-title").textContent = "📦 " + (res.bids.length ? "상자 속엔 $" + res.value + (res.value ? "!" : "… 텅") + " · " + (w ? w.name : "떠난 손님") + " $" + res.price + "에 낙찰" : "유찰! 아무도 안 산 상자에는 사실… $" + res.value);
+      $("result-rows").innerHTML = room.players.map((p) => '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+        '<span class="tag'+(p === w ? " mine" : "")+'">'+(p === w ? "🔨 낙찰 $"+res.price : bidOf[p.id] ? "입찰 $"+bidOf[p.id] : p.mining ? "⛏️ 탄광" : "패스")+"</span>" +
+        (p === w ? '<span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : "")+'<span class="odds">$'+p.money+"</span></div>").join("");
+      if(mine && net > 0){ sfxWin(); confetti(net >= room.cap ? 160 : 60); } else if(mine && net < 0) sfxLose();
+      return;
+    }
     if(room.pg){
       $("result-title").textContent = "🐧 빙산 건너기 결과";
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1198,11 +1239,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1643,6 +1684,159 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 미스터리 상자 경매 ----------
+  // 패널: 상자 금액 분포표 + 나만 아는 힌트 + 밀봉 입찰 버튼. 내 힌트·입찰액은 서버가 나한테만 보내 준다(auMe) — 방 정보에는 없다.
+  // 장면: 경매장 무대. 플레이어는 입찰 팻말을 들고(내 것만 금액, 남의 것은 "?"), 공개되면 낮은 순으로 뒤집힌다 → 땅땅! → 상자 개봉.
+  let auMe = null, auT0 = 0, auStep = 0; // auT0 = 공개 연출이 시작된 시각(초), auStep = 지금까지 터뜨린 연출(소리·파티클) 수
+  const AU_LOOK = {top:4, bottom:1, hair:3, hairColor:0, skin:0};
+  const auOpenAt = (n) => 2.2+0.8*n; // 서버 auOpenAt과 같아야 함: 입찰 n개를 0.8초 간격으로 뒤집고 → 땅땅 → 1초 뒤 개봉
+  const auMine = () => (auMe && room.au && auMe.day === room.day && auMe.round === room.au.round ? auMe : {hint:null, bid:0}); // 지난 판 것은 버린다
+  function renderAu(){
+    const my = me(), A = room.au, betting = room.phase === "betting", mine = auMine(), hp = mine.hint == null ? 0 : A.probs[mine.hint];
+    $("au-table").innerHTML = A.vals.map((v,i) => '<div class="spot'+(mine.hint === i ? " miss" : "")+'"><b>$'+v+"</b><small>"+Math.round(A.probs[i]*100)+"%"+(mine.hint === i ? " · 🤫 아님" : "")+"</small></div>").join("");
+    const ev = (skip) => Math.round(A.vals.reduce((s,v,i) => s+(i === skip ? 0 : v*A.probs[i]), 0)/(1-(skip == null ? 0 : hp)));
+    $("au-note").innerHTML = "<span>상자 기대값 $"+ev(null)+(mine.hint == null ? "" : " → 힌트 반영 $"+ev(mine.hint))+"</span>" +
+      (mine.hint == null ? "" : "<b>🤫 나만 아는 힌트: 이 상자는 $"+A.vals[mine.hint]+"짜리가 아니다!</b>");
+    document.querySelectorAll("#au-chips .chip").forEach((c) => { c.disabled = !betting || my.ready || my.mining; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : mine.bid ? "$"+mine.bid+"에 입찰 확정" : "패스하고 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음) · 내 입찰가 $" + mine.bid + " (밀봉)" :
+      "📦 " + A.round + "/" + A.rounds + "번째 상자 · 내 입찰가 $" + mine.bid + " (공개 전까지 나만 보여요) · 최고가 1명만 입찰가를 내고 상자를 가져가요. 채팅으로 블러핑! (상한 $" + room.cap + ")";
+  }
+  $("au-chips").addEventListener("click", (e) => {
+    const el = e.target.closest(".chip");
+    if(!el || el.disabled) return;
+    ensureAudio();
+    const a = el.dataset.au, cur = auMine(), max = Math.min(room.cap, me().money), v = a === "clear" ? 0 : a === "all" ? max : Math.min(max, cur.bid+Number(a));
+    if(a !== "clear" && v === cur.bid) return toast(max < room.cap ? "가진 돈보다 크게 부를 순 없어요!" : "입찰 상한($"+room.cap+")이에요!", true);
+    sfxChip();
+    auMe = {day:room.day, round:room.au.round, hint:cur.hint, bid:v}; // 바로 반영(연타해도 안 씹히게), 서버가 같은 값으로 확인해 준다
+    sendMsg({type:"auBid", v:v}); renderAu();
+  });
+
+  function auText(g, txt, x, y, fs, fill){
+    g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round"; g.lineWidth = Math.max(3, fs*0.16); g.strokeStyle = "#161320"; g.fillStyle = fill;
+    g.strokeText(txt, x, y); g.fillText(txt, x, y);
+  }
+  // 경매장 배경: 붉은 커튼 + 상자를 비추는 조명 + 나무 무대(sy = 무대 바닥선) + 객석 바닥
+  function auStage(g, w, h, sy, beam, now){
+    const wall = g.createLinearGradient(0,0,0,h); wall.addColorStop(0,"#5a1a2c"); wall.addColorStop(1,"#1c0b16");
+    g.fillStyle = wall; g.fillRect(0,0,w,h);
+    const fold = Math.max(14, w/26);
+    g.fillStyle = "rgba(0,0,0,.2)"; for(let x=0; x<w; x+=fold*2) g.fillRect(x, 0, fold, sy);
+    g.fillStyle = "#7d2238"; g.fillRect(0, 0, w, h*0.055); g.fillStyle = "#ffdd7a"; g.fillRect(0, h*0.055, w, 2);
+    g.fillStyle = "rgba(255,236,170,"+(0.14+0.03*S(now*3))+")"; g.beginPath(); g.moveTo(w/2-beam*0.15, 0); g.lineTo(w/2+beam*0.15, 0); g.lineTo(w/2+beam, sy+h*0.03); g.lineTo(w/2-beam, sy+h*0.03); g.fill();
+    g.fillStyle = "#a06a38"; g.fillRect(0, sy-h*0.03, w, h*0.075);
+    g.fillStyle = "#6b4424"; g.fillRect(0, sy+h*0.045, w, h*0.06);
+    g.fillStyle = "rgba(0,0,0,.18)"; for(let x=fold; x<w; x+=fold*3) g.fillRect(x, sy-h*0.03, 2, h*0.075);
+    g.fillStyle = "#1f1420"; g.fillRect(0, sy+h*0.105, w, h);
+    for(let x=fold; x<w; x+=fold*2.5){ g.fillStyle = "rgba(255,221,122,"+(0.55+0.3*S(now*4+x))+")"; g.beginPath(); g.arc(x, sy+h*0.06, Math.max(2, h*0.008), 0, T); g.fill(); } // 무대 앞 조명
+  }
+  // 복셀 선물 상자. (cx, y) = 바닥 가운데, open 0~1 = 뚜껑이 날아간 정도, tilt = 덜컹거림(rad)
+  function auBox(g, cx, y, u, open, tilt){
+    g.save(); g.translate(cx, y); g.rotate(tilt); g.scale(u,u); g.translate(-8,0);
+    g.fillStyle = "rgba(0,0,0,.25)"; g.beginPath(); g.ellipse(8.5, 0, 9.5, 1.4, 0, 0, T); g.fill();
+    drawBox(g,0,0,0,12,9,8,"#e8443a"); drawBox(g,5,0,0,2,9,0,"#ffdd7a"); drawBox(g,0,3.6,0,12,1.8,0,"#ffdd7a");
+    if(open > 0) drawBox(g,0.8,9,0.8,10.4,0,6.4,"#2a0d14"); // 열린 속
+    g.translate(open*7, -(9+open*9)); g.translate(8,-1.3); g.rotate(open*0.9); g.translate(-8,1.3);
+    drawBox(g,-0.7,0,-0.6,13.4,2.6,9.2,"#ff6b5e"); drawBox(g,5,0,-0.6,2,2.6,0,"#ffdd7a"); drawBox(g,5,2.6,-0.6,2,0,9.2,"#ffdd7a");
+    drawBox(g,3.2,2.6,3,2.6,1.9,2,"#ffc93a"); drawBox(g,7.2,2.6,3,2.6,1.9,2,"#ffc93a"); drawBox(g,5.7,2.6,3.2,1.6,1.3,1.6,"#e8ac3a"); // 리본 매듭
+    g.restore();
+  }
+  function drawAuction(ts, dt){
+    const g = ctx, now = ts/1000, A = room.au, V = A.reveal, n = room.players.length, nb = V ? V.bids.length : 0;
+    const t = !V ? -1 : room.phase === "auReveal" ? now-auT0 : 1e6, tWin = 1.2+0.8*nb, tOpen = auOpenAt(nb), opened = t >= tOpen, live = room.phase === "auReveal";
+    const winner = V && room.players.find((p) => p.id === V.winner), wName = winner ? winner.name : "떠난 손님", net = V ? V.value-V.price : 0;
+    const sy = H*0.5, bu = clamp(Math.min(H/50, W/70), 3.2, 8), du = clamp(H/80, 2.2, 4.2), bx = W/2, boxTop = sy-15*bu;
+    auStage(g, W, H, sy, bu*11, now);
+
+    // 경매사 + 연단 + 망치 (공개 중엔 망치를 치켜들고, 낙찰되면 두 번 내리친다)
+    const ax = clamp(W/2-Math.max(W*0.26, 15*bu), 8*du, W), calling = t >= 0 && t < tWin+0.7, hit = t >= tWin && t < tWin+0.5 ? Math.abs(S((t-tWin)*T*2)) : 0;
+    drawPerson(g, AU_LOOK, ax, sy+1.5*du, du, calling ? "wave" : "idle", now, 9);
+    g.save(); g.translate(ax-6*du, sy+H*0.04); g.scale(du,du); drawBox(g,0,0,0,11,6.5,3,"#5a3820"); drawBox(g,-0.6,6.5,-0.4,12.2,1.1,3.8,"#7a4f2a"); g.restore();
+    g.save();
+    if(calling){ g.translate(ax+4.3*du, sy+1.5*du-(17.7+S((now+9)*10)*0.7)*du); g.rotate(-0.35+1.75*hit); } else { g.translate(ax+2*du, sy+H*0.04-8.1*du); g.rotate(PI/2); }
+    g.fillStyle = "#7a4f2a"; g.fillRect(-0.4*du, -5.4*du, 0.8*du, 5.8*du); g.fillStyle = "#3d2412"; g.fillRect(-2*du, -7.2*du, 4*du, 2.2*du); g.fillStyle = "#ffdd7a"; g.fillRect(-2*du, -6.4*du, 4*du, 0.5*du);
+    g.restore();
+
+    // 상자: 탁자 위에서 살짝 흔들리다 가끔 덜컹. 공개가 진행될수록 더 요동친다
+    const rattle = !live && now%3.4 < 0.45, tilt = opened ? 0 : live ? S(now*19)*(0.015+0.06*clamp(t/tOpen,0,1)) : rattle ? S(now*42)*0.07 : S(now*2.3)*0.03;
+    const f = clamp((t-tOpen)/0.35, 0, 1), open = 1-Math.pow(1-f,3);
+    g.save(); g.translate(bx-10*bu, sy+H*0.02); g.scale(bu,bu); drawBox(g,0,0,0,18,3,5,"#5a3820"); drawBox(g,-0.8,3,-0.5,19.6,1,6,"#7a4f2a"); g.restore();
+    if(opened && V.value > 0){ const glow = g.createRadialGradient(bx, boxTop+6*bu, 2, bx, boxTop+6*bu, bu*16); glow.addColorStop(0,"rgba(255,221,122,.55)"); glow.addColorStop(1,"rgba(255,221,122,0)"); g.fillStyle = glow; g.fillRect(bx-bu*16, boxTop-bu*10, bu*32, bu*26); }
+    auBox(g, bx, sy+H*0.02-4*bu-(rattle ? Math.abs(S(now*21))*bu*0.8 : 0), bu, open, tilt);
+    if(!opened) auText(g, "?", bx+bu*2, boxTop-bu*3.2+S(now*3)*bu*0.6, bu*6, "#ffdd7a");
+    else {
+      const fs = clamp(H*0.13, 24, 56)*(0.6+0.4*f+0.25*S(f*PI));
+      auText(g, "$"+V.value, bx, boxTop-bu*1.5, fs, V.value ? "#ffdd7a" : "#c9c3b9");
+      pill(g, bx, sy+H*0.02-2*bu, !nb ? "유찰 · 아무도 안 샀다" : wName+" "+(net >= 0 ? "+$" : "−$")+Math.abs(net), !nb ? "rgba(11,10,19,.85)" : net >= 0 ? "#7bd88f" : "#ff5d72", !nb ? "#fff" : "#161320", clamp(H*0.04, 11, 15));
+      if(!V.value){ // 텅 빈 상자 위를 맴도는 파리 한 마리
+        const fx = bx+Math.cos(now*4.3)*bu*7+S(now*9)*bu, fy = boxTop+bu*4+S(now*6.1)*bu*2.5;
+        g.fillStyle = "rgba(255,255,255,.75)"; for(const k of [-1,1]){ g.beginPath(); g.ellipse(fx+k*bu*0.45, fy-bu*0.3, bu*0.5, Math.abs(S(now*60))*bu*0.35+0.5, k*0.5, 0, T); g.fill(); }
+        g.fillStyle = "#161320"; g.beginPath(); g.arc(fx, fy, Math.max(2, bu*0.42), 0, T); g.fill();
+      }
+    }
+    pill(g, clamp(W/2+Math.max(W*0.26, 15*bu), 0, W-44), sy-H*0.3, "LOT "+A.round+"/"+A.rounds, "#ffdd7a", "#161320", clamp(H*0.04, 10, 14));
+
+    // 경매사의 한마디
+    const shown = V ? V.bids.filter((_,k) => t >= 1.375+0.8*k) : [], // 팻말 앞면이 돌아 나오는 순간(뒤집기 절반)에 맞춰 부른다
+      last = shown.length && room.players.find((p) => p.id === shown[shown.length-1].id), waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    const line = !V ? "자, 입찰하세요!" + (waiting ? " (" + waiting + "명 남음)" : "") :
+      opened ? (!nb ? "안 팔린 상자엔 사실…" : V.value ? "상자 속엔 $" + V.value + "!" : "텅… 파리만 날리네요") :
+      t >= tWin ? (nb ? "땅땅! " + wName + " $" + V.price + " 낙찰!" : "유찰… 상자나 열어 봅시다") :
+      shown.length ? (last ? last.name : "떠난 손님") + " $" + shown[shown.length-1].bid + "!" + (shown.length < nb ? " 더 없습니까?" : "") : "입찰 마감! 공개합니다";
+    const lfs = clamp(H*0.038, 10.5, 14); g.font = "800 "+lfs+"px Rubik, sans-serif";
+    const lw = g.measureText(line).width+lfs*1.1;
+    let lmax = W-lw/2-4;
+    if(opened){ g.font = "800 "+clamp(H*0.13, 24, 56)+"px Rubik, sans-serif"; lmax = bx-g.measureText("$"+V.value).width/2-lw/2-6; } // 상자 위 금액을 가리지 않게
+    pill(g, clamp(ax, lw/2+4, Math.max(lw/2+4, lmax)), sy+1.5*du-21*du-lfs*1.2, line, "#fff", "#161320", lfs);
+
+    // 연출 타이밍: 팻말 뒤집기(입찰 수만큼) → 땅땅 → 개봉. 소리·파티클은 공개 중에 한 번씩만
+    if(live) for(const evs = V.bids.map((_,k) => 1.2+0.8*k).concat(tWin, tOpen); auStep < evs.length && t >= evs[auStep]; auStep++){
+      if(auStep < nb) tone(520+auStep*110, 0.09, "square", 0.08, 760+auStep*110);
+      else if(auStep === nb){
+        if(!nb){ tone(330, 0.5, "triangle", 0.1, 160); continue; }
+        setOverlay("🔨 땅땅!", 900);
+        [0.12, 0.37].forEach((d) => { tone(190, 0.09, "square", 0.16, 90, d); if(actx) drum(actx.currentTime+d, 0.07, 0.2, 700); });
+        burst(12, null, sy-8*du, (dx,dy) => ({x:ax+6*du, star:1, color:"#ffdd7a", vx:dx*120, vy:dy*120-40, g:200, life:0.7, w:4+R()*3, spin:7}));
+      } else if(V.value){ // 동전 분수 (+ 상한의 1.5배 이상이면 불꽃놀이)
+        sfxCoin(); if(V.value >= room.cap*1.5){ fireworks(); sfxWin(); }
+      } else { // 꽝: 먼지만 풀썩
+        sfxLose(); tone(210, 0.9, "sawtooth", 0.025, 250, 0.5);
+        burst(22, null, boxTop+5*bu, (dx,dy) => ({x:bx+dx*bu*4, color:R()<0.5?"#9a8f86":"#6f665f", vx:dx*70, vy:-20-Math.abs(dy)*50, life:0.9+R()*0.5, w:bu*(0.8+R()), grow:bu*3.5, spin:1.5}));
+      }
+    }
+    if(live && V.value && t >= tOpen && t < tOpen+1.8) for(let c = dt*(40+50*Math.min(3, V.value/room.cap)); c > R(); c--)
+      emit(null, boxTop+5*bu, {x:bx+(R()-0.5)*bu*8, color:R()<0.5?"#ffdd7a":"#e8ac3a", vx:(R()-0.5)*bu*60, vy:-bu*(50+R()*40), g:bu*130, life:1.2, w:bu*1.1, h:bu*0.8, spin:9});
+
+    // 플레이어 + 입찰 팻말
+    const pu = clamp(H/88, 2, 3.6), bh = clamp(H*0.085, 20, 30), bw = Math.min(W/n-10, bh*2.5), my = auMine();
+    room.players.forEach((p, i) => {
+      const cx = W*(i+0.5)/n, fy = H-3, isW = V && p.id === V.winner, k = V ? V.bids.findIndex((b) => b.id === p.id) : -1;
+      const pose = p.mining ? "mine" : isW && t >= tOpen+0.3 ? (net > 0 ? "cheer" : net < 0 ? "sad" : "idle") : (V ? k >= 0 : p.ready) ? "wave" : "idle";
+      drawPerson(g, p.look, cx, fy, pu, pose, now, i*1.7);
+      const lines = [[p.name, PCOL[p.color]]];
+      if(isW && t >= tOpen+0.3) lines.push([(net >= 0 ? "+$" : "−$")+Math.abs(net), net >= 0 ? "#7bd88f" : "#ff5d72"]);
+      if(p.mining) return personLabel(g, p, cx, fy-21*pu, 11, lines);
+      const sx0 = cx+4.3*pu, up = pose === "wave" || pose === "cheer", bounce = isW && t >= tWin && t < tWin+1 ? Math.abs(S((t-tWin)*9))*6*(1-(t-tWin)) : 0, by = fy-19.6*pu-bh/2-bounce;
+      const ff = V ? clamp((t-(k >= 0 ? 1.2+0.8*k : 0.5))/0.35, 0, 1) : 0, flipped = ff >= 0.5; // 뒤집히는 중의 가로 비율 = |cos|
+      g.fillStyle = "#7a4f2a"; g.fillRect(sx0-1.5, by, 3, fy-(up ? 17.5 : 5.2)*pu-by);
+      g.save(); g.translate(sx0, by); g.scale(Math.max(0.04, Math.abs(Math.cos(ff*PI))), 1);
+      if(flipped && t >= tWin && nb && !isW) g.globalAlpha = 0.6;
+      g.fillStyle = flipped ? (k < 0 ? "#8d8798" : isW && t >= tWin ? "#ffdd7a" : "#fdf6e3") : "#fdf6e3"; rr(g, -bw/2, -bh/2, bw, bh, 6); g.fill();
+      g.lineWidth = p.id === myId ? 3 : 2; g.strokeStyle = p.id === myId ? "#e8ac3a" : "#7a4f2a"; g.stroke();
+      g.fillStyle = flipped && k < 0 ? "#2a2433" : "#161320"; g.font = "800 "+bh*0.56+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText(flipped ? (k < 0 ? "패스" : "$"+V.bids[k].bid) : p.id === myId ? "$"+my.bid : "?", 0, 1);
+      g.restore();
+      if(!V && p.ready){ g.fillStyle = "#7bd88f"; g.beginPath(); g.arc(sx0+bw/2-2, by-bh/2+2, bh*0.3, 0, T); g.fill(); g.fillStyle = "#161320"; g.font = "800 "+bh*0.4+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("✔", sx0+bw/2-2, by-bh/2+3); }
+      personLabel(g, p, sx0, by-bh/2-5, 11, lines);
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1873,7 +2067,8 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
+    auction:   {name:"미스터리 상자 경매", icon:"🎁", sub:"하루 3판 · 밀봉 입찰로 상자를 낙찰"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
   let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
@@ -1919,6 +2114,13 @@
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
+    if(key === "auction"){ // 무대 위에서 덜컹거리는 상자와 물음표
+      const sy = h*0.43, u = w/36, rattle = now%2.6 < 0.5 ? S(now*40)*0.08 : S(now*2.3)*0.03;
+      auStage(g, w, h, sy, u*9, now);
+      auBox(g, w/2, sy+u-(now%2.6 < 0.5 ? Math.abs(S(now*20))*u : 0), u, 0, rattle);
+      auText(g, "?", w/2+u*2, sy-u*15+S(now*3)*u, u*7, "#ffdd7a");
+      return;
+    }
     if(key === "derby"){
       const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
       sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
@@ -2020,6 +2222,7 @@
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
     if(room.game === "penguin") return drawPenguinGame(ts, dt);
+    if(room.game === "auction") return drawAuction(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

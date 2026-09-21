@@ -854,13 +854,11 @@
     src.connect(f); f.connect(g); g.connect(out || master); src.start(t); src.stop(t+dur);
   }
   let bgmStep = 0, bgmNext = 0;
+  // 진행 중(경주·딜·굴림·공개·차례 등)엔 BGM이 빨라진다. 새 게임의 진행 phase는 여기에 추가
+  const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","blCount","blFly","cnMarket","pkDrop"];
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
-    // 코인 장중도 빠른 템포로. 머지 규칙상 아래 hot 줄은 못 고치니, 그 한 줄이 계산되는 동안만 phase를 "playing"으로 보이게 한다 (동기 코드라 다른 데서는 안 보인다)
-    // ponytail: 다 합친 뒤에는 hot 조건에 room.phase === "cnMarket"을 넣고 cnHot 세 줄을 지우면 된다
-    const cnHot = !!room && room.phase === "cnMarket"; if(cnHot) room.phase = "playing";
-    const hot = room && (room.phase === "racing" || room.phase === "countdown" || room.phase === "playing" || room.phase === "rolling"), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
-    if(cnHot) room.phase = "cnMarket";
+    const hot = room && HOT_PHASES.includes(room.phase), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
     if(bgmNext < actx.currentTime) bgmNext = actx.currentTime+0.05; // 처음이거나 탭이 숨겨졌다 돌아온 경우
     while(bgmNext < actx.currentTime+0.3){
       const bar = Math.floor(bgmStep/16)%8, st = bgmStep%16, beat = st>>2, sub = st&3, t = bgmNext;
@@ -1179,7 +1177,7 @@
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
     const capTxt = " (오늘 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(left, my.money)) + ")";
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       room.phase === "countdown" ? "곧 출발합니다!" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       selected < 0 ? "동물을 고른 뒤 칩을 눌러 베팅하세요." + capTxt :
@@ -1196,7 +1194,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : bet ? "출발 준비 완료" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🐧 " + G.round + "/" + G.rounds + "번째 판 · 내 베팅 $" + bet + " · 빙산을 건널수록 배당이 커져요, 완주하면 x" + G.mults[G.mults.length-1] + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
     const st = my.pg, busy = performance.now() < pgBusyUntil, can = room.phase === "playing" && st && st.state === "playing" && !busy;
@@ -1242,7 +1240,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : sum(my.bets) ? "굴려! (준비 완료)" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length, left = Math.max(0, Math.min(room.cap-sum(my.bets), my.money));
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🎲 " + D.round + "/" + D.rounds + "번째 판 · " + (selected < 0 ? "칸을 고른 뒤 칩을 누르세요. 여러 칸에 나눠 걸어도 돼요." : DICE_LABELS[selected][0] + (selected > 4 ? " (합)" : "") + " · 적중하면 x" + D.odds[selected].toFixed(1)) +
       " (판당 상한 $" + room.cap + " · 남은 한도 $" + left + ")";
@@ -1262,7 +1260,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : bet ? "딜 받기 (준비 완료)" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🃏 " + B.hand + "/" + B.hands + "번째 판 · 내 베팅 $" + bet + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
     const st = my.bj && my.bj.state, can = room.phase === "playing" && st === "playing";
@@ -1512,7 +1510,7 @@
     $("night-note").textContent = my.money > 0 ? (room.players.some((p) => p.begging) ? "구걸 중인 친구의 말풍선을 누르면 $"+ALMS+"을 건넬 수 있어요. 모른 척 넘어가도 됩니다 😈" : "") :
       last ? "마지막 날에 파산이라니…" :
       my.begging ? "누군가 적선해 주길 기다리는 중… 아무도 안 주면 내일은 아오지 탄광행입니다." :
-      my.begged ? "내일은 아오지 탄광에서 일합니다. (게임은 관전만, 밤에 일당 $200)" :
+      my.begged ? "내일은 아오지 탄광에서 일합니다. (게임은 관전만, 캔 만큼 밤에 일당 $100~1000)" :
       "파산! 아래 한푼줍쇼 버튼은 딱 한 번만 누를 수 있어요. 그냥 넘어가면 바로 탄광행.";
     const b = $("btn-night");
     b.textContent = my.ready ? "대기 중… (취소)" : last ? "최종 결과 보기 ▶" : my.money === 0 && !my.begged ? "포기하고 탄광 가기 ▶" : "다음 날로 ▶";
@@ -2140,7 +2138,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : mine ? "숫자 " + mine + " 확정!" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length, pot = N.carry + room.players.reduce((a,p) => a+(p.bets[0] || 0), 0);
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🙊 " + N.round + "/" + N.rounds + "번째 판 · 참가비 $" + room.cap + " · 현재 판돈 $" + pot + (N.carry ? " (이월금 $" + N.carry + " 포함)" : "") + " · 내 숫자 " + (mine || "없음") +
       " — 남과 안 겹친 가장 작은 숫자가 독식! 숫자를 누르면 참가 / 다시 누르면 취소";
@@ -2248,7 +2246,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : joined ? "카드 받기 (준비 완료)" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🙈 " + I.round + "/" + I.rounds + "번째 판 · 참가비 $" + cap + ", 콜하면 $" + cap + " 더 · 내 카드만 못 봐요! 콜한 사람 중 제일 높은 카드(A=1 < 10)가 판돈의 95%를 가져가요. 10 들고 다이하면 벌금 $" + cap;
     const inHand = I.ids.includes(myId), done = I.done.includes(myId), can = room.phase === "ipDecide" && inHand && !done;
@@ -2375,7 +2373,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : mine.bid ? "$"+mine.bid+"에 입찰 확정" : "패스하고 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음) · 내 입찰가 $" + mine.bid + " (밀봉)" :
       "📦 " + A.round + "/" + A.rounds + "번째 상자 · 내 입찰가 $" + mine.bid + " (공개 전까지 나만 보여요) · 최고가 1명만 입찰가를 내고 상자를 가져가요. 채팅으로 블러핑! (상한 $" + room.cap + ")";
   }
@@ -2531,7 +2529,7 @@
     bi.textContent = joined ? "참가 취소 (+$"+room.cap+")" : "목숨 걸기 💥 −$"+room.cap;
     bi.classList.toggle("on", joined);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "💥 " + G.round + "/" + G.rounds + "번째 판 · 참가비 $" + room.cap + " 고정 · 6발 중 1발이 진짜! 맞으면 낸 돈을 다 잃고, 생존자들이 판돈의 95%를 나눠 가져요. (2명 이상 참가해야 시작)" + (!joined && my.money < room.cap ? " · 돈이 모자라 구경만 할 수 있어요" : "");
     if(!turn) return;
@@ -2691,7 +2689,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : bet ? "줄 잡기 (준비 완료)" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🎈 " + B.round + "/" + B.rounds + "번째 판 · 내 베팅 $" + bet + " · 풍선이 터지기 전에 놓으면 그때 배수만큼! 최대 x" + B.max + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
     blBtn();
@@ -2813,7 +2811,7 @@
     btnReady.textContent = my.ready ? "준비 취소" : bet ? "장 입장 (준비 완료)" : "이번 판은 구경하기";
     btnReady.classList.toggle("on", my.ready);
     const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🪙 " + C.round + "/" + C.rounds + "번째 판 · 내 투자금 $" + bet + " · 30초 동안 싸게 사서 비싸게 파세요, 거래마다 수수료 " + C.fee*100 + "% (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
     for(const p of room.players){ // 새 체결: 소리 + 차트 위 반짝이 (처음 보는 사람 = 도중 입장이면 조용히 세기만)
@@ -2964,7 +2962,7 @@
     $("pk-hint").textContent = betting ? "공이 떨어질 구역을 맞히면 판돈 × 배당, 빗나가면 꽝! 칸의 %는 공이 그 칸에 떨어질 확률이에요." :
       hit < 0 ? (bet ? "내 공이 떨어지는 중… "+PK_ZONES[zone]+"에 떨어져라! 🤞" : "이번 판은 구경 중") :
       v.m ? "🎉 "+PK_ZONES[zone]+" 적중! x"+v.m+" → +$"+net : "꽝… 공이 "+PK_ZONES[K.zoneOf[hit]]+"에 떨어졌어요 −$"+bet;
-    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
       my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
       "🔴 " + K.round + "/" + K.rounds + "번째 판 · 내 베팅 $" + bet + " · " + PK_ZONES[zone] + " x" + K.odds[zone] + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
   }
@@ -3527,7 +3525,6 @@
     const my = me();
     $("mn-panel").hidden = !my.mining;
     room.players.forEach((p, i) => { const chip = $("hud-players").children[i]; if(p.mining && chip) chip.insertAdjacentHTML("beforeend", '<span class="mn-earn">$'+(p.mnEarn||0)+"</span>"); }); // HUD 칩: ⛏️$340
-    for(const id of ["bet-hint","night-note"]) $(id).textContent = $(id).textContent.replace("밤에 일당 $200", "캔 만큼 밤에 일당 $"+MN_BASE+"~"+MN_MAX); // 게임별 안내 문구에 남은 옛 고정 일당
     if(room.phase === "night") ranked().forEach((p, i) => { // 정산표 "⛏️ 탄광 일당" 태그에 금액 (+ 다이아 캤으면 💎). 행 순서 = renderNight의 ranked()
       const n = room.night[p.id], row = $("night-rows").children[i], tag = row && row.querySelector(".tag.mine");
       if(n && n.wage && tag) tag.textContent = "⛏️ 탄광 일당 $"+n.wage+(n.mnDia ? " 💎" : "");

@@ -1,7 +1,7 @@
 // 뒷방 한탕 - 서버 기반 4인 베팅 게임 (wasd-tori-server와 같은 뼈대: Node 내장 모듈만 사용)
 // 메타: 각자 $1000으로 시작해 방장이 정한 날수(기본 7일) 동안 가장 많이 불린 사람이 우승.
 //   투표 = 랜덤 3개 게임 + 무작위 중에서 골라 득표 비례 확률로 추첨 → 낮 = 그날의 도박 컨텐츠 → 밤 = 정산.
-//   밤에 파산($0)이면 한푼줍쇼 1회. 아무도 안 주면 다음 날은 아오지 탄광(관전만) → 그날 밤 일당 $200.
+//   밤에 파산($0)이면 한푼줍쇼 1회(또는 사채). 아무도 안 주면 다음 날은 아오지 탄광(게임은 관전, 곡괭이질 미니게임) → 그날 밤 일당 $100 + 캔 돈(최대 $1000).
 // 서버가 돈/베팅/경주 결과를 전부 소유한다. 경주는 출발 순간 서버가 끝까지 미리 시뮬레이션해서
 // 프레임 통째로 내려주고, 클라이언트는 재생만 한다. (베팅은 이미 잠긴 뒤라 결과를 미리 알아도 쓸 데가 없다)
 
@@ -1394,8 +1394,8 @@ function joinRoom(ws, room, name) {
   if (room.phase === "night" || room.phase === "final") history[room.day] = START_MONEY;
   room.players.set(ws, { id: ws.id, name: cleanName(name), color, look: pickLook(room), money: START_MONEY, dayStart: START_MONEY, history,
     ready: false, begging: false, begged: false, mining: false, bets: {} });
+  room.players.get(ws).ttStats = ttNew(); // 시상식 칭호 통계 (도중 입장자도 빈 통계로. 나갔다 온 사람은 아래 rcJoin이 되돌린다)
   rcJoin(ws, room);
-  room.players.get(ws).ttStats = ttNew(); // 시상식 칭호 통계 (도중 입장자도 빈 통계로)
   send(ws, { type: "joined", playerId: ws.id });
   broadcastRoom(room);
   broadcastRoomList();
@@ -1586,9 +1586,16 @@ const rcAutoAct = {
     broadcastRoom(room);
     pgCheckDone(room);
   },
+  indian: (room, p) => ipAct(room, p, "die"), // 결정 못 하고 끊기면 다이 (이미 정했으면 ipAct가 무시)
+  watergun: (room, p) => wgAct(room, p, "pull"), // 자기 차례면 당긴다 (차례가 아니면 wgAct가 무시)
+  balloon: (room, p) => blAct(room, p), // 쥐고 있던 풍선은 그 자리에서 놓는다
 };
 // 복귀할 때 부르는 훅 (room, ws, p): 게임별로 본인에게만 보내던 비공개 정보를 다시 보낸다. 새 게임이 rcResync.push(...)로 붙인다.
-const rcResync = [];
+const rcResync = [
+  (room, ws, p) => room.nc && room.nc.picks[p.id] && send(ws, { type: "ncPick", n: room.nc.picks[p.id] }), // 눈치 숫자: 내가 고른 숫자
+  (room, ws) => room.phase === "ipDecide" && ipPeek(ws, room), // 인디언 포커: 나 빼고 남들 카드
+  (room, ws) => room.au && auSendMe(room, ws), // 경매: 내 비밀 힌트·입찰액
+];
 
 function rcHello(ws, tok) {
   if (ws.room || typeof tok !== "string" || !/^[\w-]{8,64}$/.test(tok)) return;
@@ -1650,7 +1657,8 @@ function rcDrop(room) {
 function rcLeave(ws, room, p) {
   if (!ws.rcToken) return;
   rcTokens.delete(ws.rcToken);
-  room.rcLeft.set(ws.rcToken, { day: room.day, money: p.money, dayStart: p.dayStart, history: p.history, mining: p.mining, begged: p.begged, look: p.look, color: p.color });
+  room.rcLeft.set(ws.rcToken, { day: room.day, money: p.money, dayStart: p.dayStart, history: p.history, mining: p.mining, begged: p.begged, look: p.look, color: p.color,
+    lnDebt: p.lnDebt, ttStats: p.ttStats, mnEarn: p.mnEarn, mnRock: p.mnRock }); // 빚·통계·오늘 캔 돈도 맡겨 둔다 (나갔다 오면 빚이 사라지는 구멍 방지)
 }
 
 // joinRoom이 새 자리를 만든 직후: 토큰을 이 자리에 묶고, 이 방에서 나갔던 사람이면 그때 돈·기록으로 되돌린다
@@ -1661,8 +1669,9 @@ function rcJoin(ws, room) {
   if (!s) return;
   room.rcLeft.delete(ws.rcToken);
   const upto = room.phase === "night" || room.phase === "final" ? room.day : room.day - 1;
-  for (let d = s.history.length; d <= upto; d++) s.history[d] = s.money; // 없던 동안은 돈이 그대로였다
-  Object.assign(p, { money: s.money, dayStart: s.money, history: s.history, look: s.look }, s.day === room.day && { dayStart: s.dayStart, mining: s.mining, begged: s.begged });
+  for (let d = s.history.length; d <= upto; d++) s.history[d] = s.money - (s.lnDebt || 0); // 없던 동안은 순자산이 그대로였다
+  Object.assign(p, { money: s.money, dayStart: s.money, history: s.history, look: s.look, lnDebt: s.lnDebt || 0, ttStats: s.ttStats || p.ttStats },
+    s.day === room.day && { dayStart: s.dayStart, mining: s.mining, begged: s.begged, mnEarn: s.mnEarn, mnRock: s.mnRock });
   if (![...room.players.values()].some((q) => q !== p && q.color === s.color)) p.color = s.color;
 }
 
@@ -2347,6 +2356,34 @@ if (process.argv.includes("--check")) {
   lb.say({ type: "leave" });
   clearTimeout(rcLr.rcEmpty); rcDrop(rcLr);
   assert(!rooms.has(rcLr.code), "남은 사람이 전부 📴면 그 방도 치운다");
+  { // 머지 연결: 새 게임의 📴 자동 처리·복귀 재전송 + 나갔다 와도 빚이 안 사라짐
+    process.env.GAME = "indian";
+    const tA = crypto.randomUUID(), tB = crypto.randomUUID(), ia = conn(tA), ib = conn(tB);
+    ia.say({ type: "create", name: "IA" });
+    const ir = ia.room;
+    ib.say({ type: "join", id: ir.code, name: "IB" });
+    ia.say({ type: "start" });
+    for (const w of [ia, ib]) { w.say({ type: "ipJoin", v: true }); w.say({ type: "ready", v: true }); }
+    const IB = ir.players.get(ib);
+    assert(ir.phase === "ipDecide");
+    ib.close();
+    const ib2 = conn(tB), cards = ib2.got.filter((m) => m.type === "ipCards").at(-1);
+    assert(cards && !(IB.id in cards.cards) && Object.keys(cards.cards).length === 1, "복귀하면 남의 카드만 다시 받는다");
+    ib2.close();
+    ib2.rcTimer._onTimeout();
+    assert(ir.ip.calls[IB.id] === false, "결정 전에 📴면 다이");
+    clearTimeout(ir.timer); clearInterval(ib2.rcTimer);
+    const ib3 = conn(tB);
+    IB.lnDebt = 300;
+    ib3.say({ type: "leave" });
+    const ib4 = conn(tB);
+    ib4.say({ type: "join", id: ir.code, name: "IB" });
+    assert(ir.players.get(ib4).lnDebt === 300, "나갔다 와도 빚은 그대로");
+    clearTimeout(ir.timer);
+    for (const w of ir.players.keys()) clearInterval(w.rcTimer);
+    rooms.delete(ir.code);
+    delete process.env.GAME;
+  }
 
   { // 블록으로 묶어서 다른 셀프 체크의 변수 이름과 안 부딪히게
   // 사채: 밤에만 · 한도 $1000 · 빌린 밤은 무이자 → 다음 밤 20% → 그다음 밤 복리 · 갚기(부분/전액/돈 부족) · 파산자가 빌리면 탄광 안 감 · 최종 순위는 순자산

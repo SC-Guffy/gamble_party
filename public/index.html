@@ -174,6 +174,10 @@
   #btn-hit{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stand{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important} #btn-double{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
   :is(#bj-actions,#pg-actions) button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
   #bj-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  #nc-board{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+  #nc-board .spot b{font-size:20px} #nc-board .spot:disabled{cursor:default} #nc-board .dots{min-height:9px}
+  .spot.nc-dup{border-color:var(--bad);background:#4a1f2a}
+  #panel-bet.nc #chips{display:none}
   #night-title,#final-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
   .mk{font-size:11px;flex:none}
@@ -288,6 +292,7 @@
       <div id="panel-bet">
         <div id="cards"></div>
         <div id="dice-board" hidden></div>
+        <div id="nc-board" hidden></div>
         <div id="bet-actions">
         <div id="bet-hint"></div>
         <div id="chips">
@@ -738,6 +743,7 @@
   function sendMsg(obj){ if(ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
   function handleServerMessage(msg){
+    if(msg.type === "ncPick"){ ncMine = msg.n; if(room && room.nc) renderNc(); return; } // 눈치 숫자: 내가 고른 숫자는 서버가 나한테만 알려 준다
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -773,6 +779,7 @@
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
+    const nc = r.game === "nunchi";
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
@@ -781,22 +788,34 @@
       if(r.entrants){ clocks = r.entrants.map(() => Math.random()); buildCards(); }
       if(dice){ diceSnap = {}; buildDiceBoard(); }
       pgVis = {};
+      if(nc){ ncMine = 0; ncVis = null; buildNcBoard(); }
     }
     if(dice && !$("dice-board").children.length) buildDiceBoard(); // 도중 입장
+    if(nc && !ncBoard.children.length) buildNcBoard();
+    if(nc && r.phase === "ncReveal" && prev !== "ncReveal") ncVis = {t0: performance.now()/1000, fx: {}};
     if(r.entrants && clocks.length !== r.entrants.length) clocks = r.entrants.map(() => Math.random());
     // 주사위는 굴리는 중/결과 때도 베팅판을 그대로 보여준다(어디가 맞았는지 불이 들어온다). 칩·준비 버튼만 숨김
     $("panel-bet").hidden = !(r.phase === "betting" || r.phase === "countdown" || (dice && (r.phase === "rolling" || r.phase === "result")));
     $("bet-actions").hidden = dice && r.phase !== "betting";
+    if(nc){ $("panel-bet").hidden = !["betting","ncReveal","result"].includes(r.phase); $("bet-actions").hidden = r.phase !== "betting"; } // 눈치 숫자: 공개/결과 때도 숫자판 유지
+    ncBoard.hidden = !nc; $("panel-bet").classList.toggle("nc", nc); // 참가비 고정이라 칩은 숨긴다(CSS)
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+      nunchi: renderNc,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -854,6 +873,7 @@
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
+    if(room.nc && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 눈치 숫자 " + room.nc.round + "/" + room.nc.rounds + "판";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -987,6 +1007,20 @@
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
     $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.nc) $("result-next").textContent = room.nc.round < room.nc.rounds ? "곧 다음 판이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.nc){
+      const w = room.players.find((p) => p.id === res.winner), any = Object.keys(res.picks).length;
+      $("result-title").textContent = res.outcome === "win" ? "🏆 " + (w ? w.name : "나간 사람") + "의 " + res.picks[res.winner] + " — 안 겹친 가장 작은 숫자! $" + (res.payouts[res.winner] || {win:0}).win + " 독식" :
+        res.outcome === "carry" ? "💥 전원 겹침! 판돈 $" + res.pot + " → 다음 판으로 이월" : res.outcome === "split" ? "💥 마지막 판까지 겹침… 판돈 $" + res.pot + " 나눠 갖기" :
+        any ? "혼자 참가해서 무효 (환불)" : "아무도 참가하지 않았어요" + (res.carry ? " (이월금 $" + res.carry + " 유지)" : "");
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0;
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag">숫자 '+res.picks[p.id]+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxCoin(); confetti(mine.win > mine.bet*3 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
     if(room.pg){
       $("result-title").textContent = "🐧 빙산 건너기 결과";
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1198,11 +1232,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1643,6 +1677,124 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 눈치 숫자 ----------
+  // 1~10 숫자판을 눌러 참가(참가비 고정) → 전원 준비하면 작은 숫자부터 팻말이 뒤집힌다. 남과 안 겹친 가장 작은 숫자가 판돈 독식.
+  // 남의 숫자는 공개(ncReveal) 때 room.nc.picks로 처음 내려온다. 그 전엔 누가 참가했는지(bets[0])만 보인다.
+  let ncMine = 0, ncVis = null; // ncMine = 내 숫자(0 = 없음), ncVis = 공개 연출 {t0: 시작 시각(초), fx: 효과를 낸 숫자들, paid: 동전 날렸나}
+  const ncBoard = $("nc-board");
+  function buildNcBoard(){
+    ncBoard.innerHTML = [1,2,3,4,5,6,7,8,9,10].map((n) => '<button class="spot" data-n="'+n+'"><b>'+n+'</b><span class="mybet"></span><span class="dots"></span></button>').join("");
+  }
+  function renderNc(){
+    const my = me(), N = room.nc, betting = room.phase === "betting", res = room.phase === "result" && room.result;
+    const picks = res ? res.picks : N.picks, mine = picks ? picks[myId] : my.bets[0] ? ncMine : 0, cnt = {};
+    if(res) Object.values(picks).forEach((v) => { cnt[v] = (cnt[v] || 0)+1; });
+    ncBoard.querySelectorAll(".spot").forEach((el) => {
+      const n = Number(el.dataset.n);
+      el.disabled = !betting || my.ready || my.mining;
+      el.classList.toggle("sel", !res && mine === n);
+      el.classList.toggle("hit", !!res && res.outcome === "win" && picks[res.winner] === n); // 당첨 숫자 초록, 겹친 숫자 빨강
+      el.classList.toggle("nc-dup", cnt[n] > 1);
+      el.classList.toggle("miss", !!res && !cnt[n]);
+      el.querySelector(".mybet").textContent = mine === n ? "내 숫자" : "";
+      el.querySelector(".dots").innerHTML = res ? room.players.filter((p) => picks[p.id] === n).map((p) => '<i style="background:'+PCOL[p.color]+'"></i>').join("") : "";
+    });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : mine ? "숫자 " + mine + " 확정!" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length, pot = N.carry + room.players.reduce((a,p) => a+(p.bets[0] || 0), 0);
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🙊 " + N.round + "/" + N.rounds + "번째 판 · 참가비 $" + room.cap + " · 현재 판돈 $" + pot + (N.carry ? " (이월금 $" + N.carry + " 포함)" : "") + " · 내 숫자 " + (mine || "없음") +
+      " — 남과 안 겹친 가장 작은 숫자가 독식! 숫자를 누르면 참가 / 다시 누르면 취소";
+  }
+  ncBoard.addEventListener("click", (e) => {
+    const el = e.target.closest(".spot");
+    if(!el || el.disabled) return;
+    ensureAudio(); sfxChip();
+    sendMsg({type:"ncPick", n:Number(el.dataset.n)}); // 참가비·환불은 서버가 처리
+  });
+
+  // 팻말 판. (x, y) = 가운데, squash = 뒤집히는 중의 가로 비율 (손잡이는 부르는 쪽이 사람 뒤에 먼저 그린다)
+  function ncSign(g, x, y, w, h, txt, bg, fg, squash){
+    g.save(); g.translate(x, y); g.scale(Math.max(0.05, squash), 1);
+    g.fillStyle = "rgba(0,0,0,.3)"; rr(g,-w/2+2,-h/2+3,w,h,h*0.18); g.fill();
+    g.fillStyle = bg; rr(g,-w/2,-h/2,w,h,h*0.18); g.fill(); g.lineWidth = Math.max(1.5, h*0.08); g.strokeStyle = "#161320"; g.stroke();
+    g.fillStyle = fg; g.font = "800 "+h*0.72+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(txt, 0, h*0.06);
+    g.restore();
+  }
+  // 장면: 퀴즈쇼 무대. 가운데 위에 판돈 동전 더미, 아래에 팻말을 든 플레이어들.
+  // 공개는 작은 숫자부터 0.7초 간격(서버 정산 타이머와 같은 박자): 겹침 = 빨강 + 버저, 단독 최저 = 금색 + 팡파레, 나머지는 흰 팻말
+  function drawNunchi(ts, dt){
+    const g = ctx, now = ts/1000, N = room.nc, n = room.players.length, res = room.phase === "result" && room.result, picks = res ? res.picks : N.picks;
+    const V = ncVis || (ncVis = {t0:-99, fx:{}}); // 결과 도중에 들어왔으면 다 뒤집힌 상태로
+    const wall = g.createLinearGradient(0,0,0,H); wall.addColorStop(0,"#4a2a86"); wall.addColorStop(1,"#1a0f33");
+    g.fillStyle = wall; g.fillRect(0,0,W,H);
+    const floorY = H*0.84, pu = clamp(H/88, 2, 3.6);
+    g.fillStyle = "rgba(0,0,0,.13)"; for(let x=0; x<W; x+=44) g.fillRect(x, 0, 22, floorY); // 커튼 주름
+    g.fillStyle = "#2a1748"; g.fillRect(0, floorY, W, H-floorY); g.fillStyle = "#6b46b8"; g.fillRect(0, floorY, W, 3);
+    for(let k=0;k<3;k++){ // 흔들리는 스포트라이트
+      const ox = W*(0.2+0.3*k), bx = ox+Math.tan(S(now*0.9+k*2.1)*0.3)*floorY, bw = H*0.22;
+      const lg = g.createLinearGradient(ox, 0, bx, floorY); lg.addColorStop(0,"rgba(255,240,180,.3)"); lg.addColorStop(1,"rgba(255,240,180,.03)");
+      g.fillStyle = lg; g.beginPath(); g.moveTo(ox-5,0); g.lineTo(ox+5,0); g.lineTo(bx+bw,floorY); g.lineTo(bx-bw,floorY); g.fill();
+      g.fillStyle = "rgba(255,240,180,.1)"; g.beginPath(); g.ellipse(bx, floorY+5, bw, H*0.03, 0, 0, T); g.fill();
+    }
+    for(let x=13; x<W; x+=26){ g.fillStyle = (Math.floor(now*3)+Math.floor(x/26))%2 ? "#ffdd7a" : "#8a6a2a"; g.beginPath(); g.arc(x, 6, 3, 0, T); g.fill(); } // 전구 띠
+
+    // 판돈: 동전 더미 + 금액. 누가 가져가면(독식/나눔) 더미가 사라진다
+    const pot = res ? res.pot : N.carry + room.players.reduce((a,p) => a+(p.bets[0] || 0), 0), paid = res && (res.outcome === "win" || res.outcome === "split");
+    const fs = clamp(H*0.11, 20, 40), cw = clamp(H*0.05, 9, 16), potY = H*0.36, coins = paid ? 0 : clamp(Math.ceil(pot/Math.max(1, room.cap)*2), 0, 20);
+    for(let k=0;k<coins;k++){ g.fillStyle = k%2 ? "#ffdd7a" : "#e8ac3a"; g.beginPath(); g.ellipse(W/2+(k%5-2)*cw*2.1, potY-Math.floor(k/5)*cw*0.5, cw, cw*0.42, 0, 0, T); g.fill(); g.strokeStyle = "rgba(0,0,0,.4)"; g.lineWidth = 1; g.stroke(); }
+    g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 6; g.lineJoin = "round"; g.strokeStyle = "#161320"; g.fillStyle = "#ffdd7a";
+    g.strokeText("$"+pot, W/2, H*0.14); g.fillText("$"+pot, W/2, H*0.14);
+    const note = !res ? (N.carry ? "이월금 $"+N.carry+" 포함" : "판돈") : res.outcome === "win" ? "단독 최저 독식!" : res.outcome === "carry" ? "전원 겹침 → 다음 판으로 이월!" : res.outcome === "split" ? "끝까지 겹침 → 나눠 갖기" : pot ? "무효" : "판돈";
+    pill(g, W/2, H*0.14+fs*0.85, note, res && res.outcome === "carry" ? "#ff5d72" : "rgba(11,10,19,.8)", "#fff", clamp(H*0.04, 10, 14));
+
+    // 공개 순서·겹침·단독 최저 (무효 판은 금색 없음 — 서버 ncJudge와 같은 규칙)
+    const cnt = {}, ids = picks ? Object.keys(picks) : [];
+    ids.forEach((id) => { cnt[picks[id]] = (cnt[picks[id]] || 0)+1; });
+    const order = Object.keys(cnt).map(Number).sort((a,b) => a-b), X = (i) => W*(i+0.5)/n;
+    const winNum = res ? (res.outcome === "win" ? picks[res.winner] : 0) : ids.length > 1 || N.carry ? order.find((v) => cnt[v] === 1) || 0 : 0;
+    const flipAt = (num) => V.t0+0.4+0.7*order.indexOf(num);
+    if(room.phase === "ncReveal" && R() < dt*14 && actx) drum(actx.currentTime, 0.03, 0.03, 2600); // 두구두구
+    order.forEach((num) => { // 팻말이 반쯤 돌아간 순간에 숫자별로 한 번
+      if(V.fx[num] || now < flipAt(num)+0.2) return;
+      V.fx[num] = 1;
+      if(room.phase !== "ncReveal") return;
+      const xs = room.players.map((p,i) => (picks[p.id] === num ? X(i)+1.5*pu : null)).filter((x) => x != null), sy = H-3-28*pu;
+      if(cnt[num] > 1){ tone(120,0.45,"sawtooth",0.12,85); tone(96,0.45,"square",0.07,70);
+        xs.forEach((x) => { emit(null, sy-5.5*pu-30, {x:x, txt:"겹침!", color:"#ff5d72", vy:-26, life:1, w:clamp(pu*4.2, 11, 15)}); burst(10, null, sy, (dx,dy) => ({x:x, color:R()<0.5?"#ff5d72":"#5a4a48", vx:dx*120, vy:dy*120-30, g:300, life:0.6, w:4+R()*3, spin:8})); });
+      } else if(num === winNum){ sfxWin(); xs.forEach((x) => burst(18, null, sy, (dx,dy) => ({x:x, star:1, color:R()<0.6?"#ffdd7a":"#fff", vx:dx*130, vy:dy*130-50, g:160, life:1, w:5+R()*4, spin:6}))); }
+      else tone(700,0.08,"triangle",0.08,1100);
+    });
+    if(res && !V.paid){ // 정산: 판돈 동전이 가져가는 사람에게 날아간다
+      V.paid = 1;
+      room.players.forEach((p,i) => { if(paid && (res.outcome === "split" ? p.id in picks : p.id === res.winner)) for(let k=0;k<16;k++) emit(null, potY, {x:W/2+(R()-0.5)*cw*8, color:k%2?"#ffdd7a":"#e8ac3a", vx:(X(i)-W/2)*1.15+(R()-0.5)*50, vy:(H-3-24*pu-potY)*1.15+R()*30, life:0.85, w:8, h:5, spin:9}); });
+    }
+
+    room.players.forEach((p, i) => {
+      const cx = X(i), fy = H-3, pay = res && res.payouts[p.id], num = picks ? picks[p.id] : 0, holds = picks ? !!num : !!p.bets[0] && !p.mining;
+      const pose = p.mining ? "mine" : pay ? (pay.win > pay.bet ? "cheer" : pay.win < pay.bet ? "sad" : "idle") : holds ? "wave" : "idle";
+      const lift = pose === "cheer" ? Math.abs(S((now+i*1.7)*7))*3*pu : 0, sy = fy-28*pu-lift; // drawPerson의 cheer 점프와 같은 식 → 팻말이 같이 뛴다
+      if(holds){ g.fillStyle = "#8a5a30"; g.fillRect(cx+3.9*pu, sy, 0.9*pu, (pose === "wave" || pose === "cheer" ? 11 : 23)*pu); } // 손잡이: 몸 뒤로 지나가서 손에 쥔 것처럼 보인다
+      drawPerson(g, p.look, cx, fy, pu, pose, now, i*1.7, !!res && res.outcome === "win" && res.winner === p.id);
+      if(holds){
+        let txt = !picks && p.ready ? "✔" : "?", bg = "#3a2a5c", fg = "#fff", sq = 1;
+        if(picks){
+          const f = clamp((now-flipAt(num))/0.4, 0, 1); sq = Math.abs(Math.cos(f*PI));
+          if(f >= 0.5){ txt = String(num); bg = cnt[num] > 1 ? "#ff5d72" : num === winNum ? "#ffdd7a" : "#fdfcf7"; fg = cnt[num] > 1 ? "#fff" : "#161320"; }
+          if(f >= 1 && num === winNum && R() < dt*7) emit(null, sy+(R()-0.5)*8*pu, {x:cx+1.5*pu+(R()-0.5)*12*pu, star:1, color:"#fff3a0", vy:-18, life:0.6, w:2+R()*3, spin:5}); // 반짝반짝
+        }
+        ncSign(g, cx+1.5*pu, sy, 10*pu, 8*pu, txt, bg, fg, sq);
+      }
+      const lines = [["$"+p.money, "#ffdd7a"], [p.name, PCOL[p.color]]];
+      if(pay) lines.unshift([(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"]);
+      else if(!holds && p.ready && !p.mining && !picks) lines.unshift(["구경", "#c9c3b9"]);
+      personLabel(g, p, cx, fy-(holds ? 33.5 : 21)*pu-lift, 11, lines.reverse());
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1873,7 +2025,8 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
+    nunchi:    {name:"눈치 숫자", icon:"🙊", sub:"하루 3판 · 안 겹친 가장 작은 숫자"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
   let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
@@ -1919,6 +2072,20 @@
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
+    if(key === "nunchi"){ // 무대 위 팻말 3개가 차례로 뒤집혔다 돌아온다: 가운데 1은 단독(금색), 양옆 2는 겹침(빨강)
+      const wall = g.createLinearGradient(0,0,0,h); wall.addColorStop(0,"#4a2a86"); wall.addColorStop(1,"#1a0f33");
+      g.fillStyle = wall; g.fillRect(0,0,w,h);
+      const fy = h*0.46, du = h/95, bx = w/2+S(now*0.9)*w*0.3;
+      g.fillStyle = "rgba(255,240,180,.16)"; g.beginPath(); g.moveTo(w/2-4,0); g.lineTo(w/2+4,0); g.lineTo(bx+w*0.24,fy); g.lineTo(bx-w*0.24,fy); g.fill();
+      g.fillStyle = "#2a1748"; g.fillRect(0,fy,w,h-fy); g.fillStyle = "#6b46b8"; g.fillRect(0,fy,w,2);
+      [[0.2,2,1],[0.5,1,0],[0.8,2,1]].forEach((q, k) => {
+        const cx = w*q[0], flip = Math.cos(now*1.3-q[2]*0.9), up = flip > 0, sy = fy-27*du;
+        g.fillStyle = "#8a5a30"; g.fillRect(cx+3.9*du, sy, 0.9*du, 11*du);
+        drawPerson(g, {top:[1,3,5][k], bottom:k, hair:[0,4,2][k], hairColor:[0,2,3][k], skin:k}, cx, fy+2, du, "wave", now, k*2);
+        ncSign(g, cx+1.5*du, sy, 11*du, 8.5*du, up ? String(q[1]) : "?", !up ? "#3a2a5c" : q[1] === 1 ? "#ffdd7a" : "#ff5d72", !up || q[1] === 2 ? "#fff" : "#161320", Math.abs(flip));
+      });
+      return;
+    }
     if(key === "derby"){
       const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
       sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
@@ -2020,6 +2187,7 @@
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
     if(room.game === "penguin") return drawPenguinGame(ts, dt);
+    if(room.game === "nunchi") return drawNunchi(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

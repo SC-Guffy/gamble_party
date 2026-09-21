@@ -584,12 +584,13 @@
   }
 
   // ---------- audio ----------
-  let actx = null, master = null, noiseBuf = null, muted = false;
+  let actx = null, master = null, bgmBus = null, noiseBuf = null, muted = false;
   try{ muted = localStorage.getItem("derby-mute") === "1"; }catch(e){}
   function ensureAudio(){
     if(!actx){
       try{ actx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){ actx = null; return; }
       master = actx.createGain(); master.gain.value = muted ? 0 : 1; master.connect(actx.destination);
+      bgmBus = actx.createGain(); bgmBus.gain.value = 0.4; bgmBus.connect(master); // BGM은 효과음보다 작게
       noiseBuf = actx.createBuffer(1, actx.sampleRate*0.25, actx.sampleRate);
       const d = noiseBuf.getChannelData(0);
       for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
@@ -626,7 +627,7 @@
   const sfxSparkle = () => tone(1568,0.12,"triangle",0.06,2093);
 
   // ---------- BGM: 직접 찍은 8비트 갤럽 (C-Am-F-G 8마디 루프). 음원 파일 없이 WebAudio로 그때그때 합성한다 ----------
-  // 경주/카운트다운 중에는 템포가 빨라지고 하이햇이 촘촘해진다.
+  // 경주/카운트다운 중에는 템포가 빨라지고 하이햇이 촘촘해진다. 밤·최종 결과에는 드럼 빼고 느린 자장가 버전.
   const CHORDS = [48,45,53,55,48,45,53,55]; // 마디별 베이스 근음 (C3 A2 F3 G3)
   const LEAD = [ // 마디별 [16분음표 위치, MIDI 음, 길이]
     [[0,67,3],[3,64,1],[4,67,2],[6,72,2],[8,71,2],[10,67,2],[12,64,4]],
@@ -642,27 +643,28 @@
     const osc = actx.createOscillator(), g = actx.createGain();
     osc.type = type; osc.frequency.value = 440*Math.pow(2,(midi-69)/12);
     g.gain.setValueAtTime(gain, t); g.gain.setValueAtTime(gain, t+dur*0.7); g.gain.linearRampToValueAtTime(0, t+dur);
-    osc.connect(g); g.connect(master); osc.start(t); osc.stop(t+dur+0.02);
+    osc.connect(g); g.connect(bgmBus); osc.start(t); osc.stop(t+dur+0.02);
   }
-  function drum(t, dur, gain, hp){
+  function drum(t, dur, gain, hp, out){
     const src = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
     src.buffer = noiseBuf; f.type = "highpass"; f.frequency.value = hp;
     g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
-    src.connect(f); f.connect(g); g.connect(master); src.start(t); src.stop(t+dur);
+    src.connect(f); f.connect(g); g.connect(out || master); src.start(t); src.stop(t+dur);
   }
   let bgmStep = 0, bgmNext = 0;
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
-    const hot = room && (room.phase === "racing" || room.phase === "countdown" || room.phase === "playing" || room.phase === "rolling"), spb = 60/(hot ? 176 : 138)/4;
+    const hot = room && (room.phase === "racing" || room.phase === "countdown" || room.phase === "playing" || room.phase === "rolling"), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
     if(bgmNext < actx.currentTime) bgmNext = actx.currentTime+0.05; // 처음이거나 탭이 숨겨졌다 돌아온 경우
     while(bgmNext < actx.currentTime+0.3){
       const bar = Math.floor(bgmStep/16)%8, st = bgmStep%16, beat = st>>2, sub = st&3, t = bgmNext;
-      if(sub !== 1) voice(t, CHORDS[bar]+(sub===3 ? 12 : beat&1 ? 7 : 0), spb*(sub===0?1.8:0.9), "triangle", 0.1); // 따-다닥 갤럽 베이스
-      for(const n of LEAD[bar]) if(n[0] === st) voice(t, n[1], spb*n[2]*0.92, "square", 0.032);
+      if(night ? sub === 0 : sub !== 1) voice(t, CHORDS[bar]+(sub===3 ? 12 : beat&1 ? 7 : 0), spb*(sub===0?1.8:0.9), "triangle", 0.1); // 따-다닥 갤럽 베이스
+      for(const n of LEAD[bar]) if(n[0] === st) voice(t, n[1], spb*n[2]*0.92, night ? "triangle" : "square", night ? 0.07 : 0.032);
+      if(night){ bgmNext += spb; bgmStep++; continue; }
       if(st%8 === 0){ const k = actx.createOscillator(), kg = actx.createGain(); k.frequency.setValueAtTime(130,t); k.frequency.exponentialRampToValueAtTime(40,t+0.12);
-        kg.gain.setValueAtTime(0.16,t); kg.gain.exponentialRampToValueAtTime(0.0001,t+0.14); k.connect(kg); kg.connect(master); k.start(t); k.stop(t+0.15); }
-      if(st%8 === 4) drum(t, 0.12, 0.06, 1500); // 스네어
-      if(hot || sub%2 === 0) drum(t, 0.03, 0.022, 7000); // 하이햇
+        kg.gain.setValueAtTime(0.16,t); kg.gain.exponentialRampToValueAtTime(0.0001,t+0.14); k.connect(kg); kg.connect(bgmBus); k.start(t); k.stop(t+0.15); }
+      if(st%8 === 4) drum(t, 0.12, 0.06, 1500, bgmBus); // 스네어
+      if(hot || sub%2 === 0) drum(t, 0.03, 0.022, 7000, bgmBus); // 하이햇
       bgmNext += spb; bgmStep++;
     }
   }

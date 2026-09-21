@@ -327,6 +327,30 @@
   #mn-btn small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
   #mn-btn:disabled{background:var(--good);box-shadow:0 6px 0 #4a9a5c;cursor:default}
   .mn-earn{color:var(--gold);margin-left:-4px}
+
+  /* ---------- 이모티콘 리액션 ---------- */
+  /* 버튼 줄: 게임 화면은 패널 맨 위(캔버스 바로 아래) 가운데에 붙인다 — 캔버스는 장면마다 구석까지 사람·동물·펭귄이 있어서 덮을 자리가 없다.
+     패널을 내려도 따라온다(sticky). 대기실·투표는 화면 왼쪽 아래 고정 */
+  #panel > #em-strip{position:sticky;top:-10px;z-index:2;align-items:center}
+  #em-bar{position:fixed;left:10px;bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:8}
+  #app:not(.in-room) #em-bar,#screen-game:not([hidden]) ~ #em-bar{display:none}
+  .em-bar{display:flex;align-items:center;gap:1px;padding:2px;border-radius:999px;background:rgba(11,10,19,.72);border:1px solid rgba(255,255,255,.14);box-shadow:0 3px 10px rgba(0,0,0,.3)}
+  .em-bar button{width:32px;height:32px;padding:0;border:none;border-radius:50%;background:none;font-size:19px;line-height:1;cursor:pointer}
+  .em-bar button:active{transform:scale(.8)}
+  .em-bar.em-open .em-t{opacity:.55}
+  .em-bar:not(.em-open) .em-b{display:none}
+  /* 날아가는 이모지: 아래끝이 (left, top)에 오게 놓고, 톡 튀어나와 좌우로 흔들리며 --up만큼 떠올라 사라진다 */
+  .em-fly{position:fixed;z-index:8;width:1em;margin:-1em 0 0 -.5em;text-align:center;font-size:clamp(24px,7vw,34px);line-height:1;pointer-events:none;transform-origin:50% 100%;filter:drop-shadow(0 2px 2px rgba(0,0,0,.45));animation:em-fly 1.4s cubic-bezier(.25,.7,.4,1) forwards}
+  @keyframes em-fly{
+    0%{transform:translate(0,0) scale(.2);opacity:0}
+    12%{transform:translate(0,calc(var(--up)*-.12)) scale(1.35);opacity:1}
+    26%{transform:translate(calc(var(--dx)*.2 - 7px),calc(var(--up)*-.25)) rotate(-14deg)}
+    44%{transform:translate(calc(var(--dx)*.45 + 7px),calc(var(--up)*-.45)) rotate(12deg)}
+    62%{transform:translate(calc(var(--dx)*.7 - 5px),calc(var(--up)*-.65)) rotate(-8deg);opacity:1}
+    100%{transform:translate(var(--dx),calc(var(--up)*-1)) scale(.85) rotate(4deg);opacity:0}
+  }
+  @keyframes em-fade{0%{opacity:0}15%,70%{opacity:1}100%{opacity:0;transform:translateY(-16px)}}
+  @media (prefers-reduced-motion: reduce){ .em-fly{animation-name:em-fade} }
 </style>
 </head>
 <body>
@@ -381,6 +405,7 @@
     <div id="track-wrap"><canvas id="canvas"></canvas><div id="overlay"></div></div>
     <div id="panel">
       <div id="mn-panel" hidden><canvas id="mn-canvas" aria-label="탄광 채굴 화면"></canvas><button id="mn-btn">⛏️ 캐기!<small>연타! (스페이스)</small></button></div>
+      <div id="em-strip"><div class="em-bar"></div></div>
       <div id="panel-bet">
         <div id="cards"></div>
         <div id="dice-board" hidden></div>
@@ -493,6 +518,7 @@
   <button id="btn-mute" aria-label="소리 켜기/끄기">🔊</button>
   <div id="toast" class="off"></div>
   <div id="rc-banner" hidden>📴 재연결 중…</div>
+  <div id="em-bar" class="em-bar"></div>
 </div>
 
 <script>
@@ -718,6 +744,7 @@
       g.font = "800 "+fs+"px Rubik, sans-serif"; g.lineWidth = 3.5; g.strokeStyle = "#161320"; g.fillStyle = ln[1];
       g.strokeText(ln[0], cx, yy); g.fillText(ln[0], cx, yy); yy -= fs*1.2;
     }
+    emAnchor[p.id] = {canvas: g.canvas, x: cx, y: yy, t: performance.now()}; // 이모티콘 리액션이 튀어 오를 자리 (이름표 맨 위)
     const say = says[p.id];
     if(say && performance.now() < say.until){
       g.font = "600 "+Math.max(11,fs)+"px Rubik, sans-serif";
@@ -926,6 +953,7 @@
     if(msg.type === "ipCards"){ ipSeen = msg.cards; if(room && room.ip) renderIp(); return; } // 인디언 포커: 나한테만 오는 남들 카드
     if(msg.type === "auMe"){ auMe = msg; if(room && room.au) renderAu(); return; } // 경매: 내 비밀 힌트 · 내 입찰액 (나한테만 온다)
     if(rcOnMessage(msg)) return; // 재접속
+    if(msg.type === "emReact") return emFly(msg); // 이모티콘 리액션
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -3624,6 +3652,54 @@
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);
     if(room.phase === "racing" && ts-lastRows > 250){ lastRows = ts; renderRaceRows(cur); }
+  }
+
+  // ---------- 이모티콘 리액션 ----------
+  // 버튼을 누르면 번호만 서버로 → 서버가 방 전원에게 돌려주면(내 것 포함) 보낸 사람 머리 위에서 튀어 오른다.
+  // 순서 = 서버 EM_COUNT 인덱스 (0~7). [이모지, 짧은 효과음]
+  const EM_LIST = [
+    ["😂", () => [0,0.08,0.16].forEach((d,i) => tone(620+i*90,0.07,"square",0.035,null,d))], // 하하하
+    ["💸", () => tone(1200,0.2,"triangle",0.05,500)],                                         // 휘리릭
+    ["😡", () => tone(150,0.25,"sawtooth",0.05,90)],                                          // 부글
+    ["🙏", () => { tone(784,0.4,"sine",0.05); tone(1175,0.4,"sine",0.03,null,0.06); }],       // 띵~
+    ["🔥", () => tone(180,0.3,"sawtooth",0.04,640)],                                          // 화르륵
+    ["👏", () => { if(actx) [0,0.1,0.2].forEach((d) => drum(actx.currentTime+d, 0.05, 0.07, 1800)); }], // 짝짝짝
+    ["😱", () => tone(880,0.32,"square",0.03,1500)],                                          // 꺄악
+    ["🤑", () => { tone(988,0.07,"square",0.04); tone(1480,0.18,"square",0.04,null,0.07); }]  // 짤랑
+  ];
+  const emAnchor = {}; // playerId -> {canvas, x, y, t}: personLabel이 그릴 때마다 남기는 머리 위 자리(캔버스 좌표)
+  const emBars = document.querySelectorAll(".em-bar"); // 게임 화면(패널 맨 위) + 대기실·투표(화면 왼쪽 아래 고정) 두 벌
+  let emOpen = matchMedia("(min-width:720px)").matches; // 좁은 화면은 접어 둔 채 시작 (캔버스를 덜 가리게)
+  try{ const v = localStorage.getItem("em-open"); if(v) emOpen = v === "1"; }catch(e){}
+  const emSet = () => emBars.forEach((b) => { b.classList.toggle("em-open", emOpen); b.firstChild.setAttribute("aria-expanded", emOpen); });
+  emBars.forEach((b) => {
+    b.innerHTML = '<button class="em-t" aria-label="이모티콘 펼치기/접기">😀</button>' + EM_LIST.map((m,i) => '<button class="em-b" data-e="'+i+'">'+m[0]+"</button>").join("");
+    b.addEventListener("click", (e) => {
+      const t = e.target.closest("button");
+      if(!t) return;
+      if(t.dataset.e) return sendMsg({type:"emReact", e:Number(t.dataset.e)}); // 내 것도 로컬로 바로 안 띄우고 서버가 돌려줄 때 띄운다
+      emOpen = !emOpen; emSet();
+      try{ localStorage.setItem("em-open", emOpen ? "1" : "0"); }catch(e){}
+    });
+  });
+  emSet();
+  function emFly(msg){
+    const em = EM_LIST[msg.e], i = room ? room.players.findIndex((p) => p.id === msg.id) : -1;
+    if(!em || i < 0 || document.hidden) return;
+    em[1]();
+    const a = emAnchor[msg.id], vw = innerWidth, vh = innerHeight;
+    let x = vw/2, y = vh*0.3; // 어디에도 없으면 화면 가운데 위
+    if(a && performance.now()-a.t < 300 && a.canvas.offsetParent){ const r = a.canvas.getBoundingClientRect(); x = r.left+a.x; y = r.top+a.y; } // 방금 그 사람을 그렸다
+    else { // 사람을 안 그리는 장면(펭귄·투표 등): 그 사람 칩 바로 아래에서 칩 쪽으로 떠오른다. 칩은 HUD/투표/대기실 모두 room.players 순서대로 그려진다
+      const box = ["hud-players","vote-players","lobby-players"].map($).find((b) => b.offsetParent), chip = box && box.children[i];
+      if(chip){ const r = chip.getBoundingClientRect(); x = r.left+r.width/2; y = r.bottom+30; }
+    }
+    x = clamp(x+(Math.random()-0.5)*12, 20, vw-20); y = clamp(y, 30, vh-10); // 연타하면 조금씩 다른 궤적
+    const el = document.createElement("span");
+    el.className = "em-fly"; el.textContent = em[0];
+    el.style.cssText = "left:"+x+"px;top:"+y+"px;--dx:"+Math.round((Math.random()-0.5)*56)+"px;--up:"+Math.round(clamp(y-24, 36, 120)*(0.85+Math.random()*0.25))+"px";
+    el.addEventListener("animationend", () => el.remove());
+    document.body.appendChild(el);
   }
 
   connect();

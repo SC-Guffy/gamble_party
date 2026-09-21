@@ -67,6 +67,7 @@ const GAMES = [
   { key: "watergun", name: "러시안 룰렛", cap: (day) => 50 + 50 * day, min: 2 }, // 하루 WG_ROUNDS판, cap = 판당 고정 참가비
   { key: "balloon", name: "풍선 불기", cap: (day) => 50 + 50 * day }, // 하루 BL_ROUNDS판, cap은 판당
   { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day }, // 하루 CN_ROUNDS판, cap은 판당 투자금
+  { key: "plinko", name: "플링코", cap: (day) => 50 + 50 * day }, // 하루 PK_ROUNDS판, cap은 판당
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -266,6 +267,7 @@ function broadcastRoom(room) {
       dice: room.dice,
       ip: room.ip && ipView(room.ip), // 카드·결정은 공개 전까지 절대 내보내지 않는다
       bl: room.bl && { round: room.bl.round, rounds: room.bl.rounds, rate: BL_RATE, max: BL_MAX, ff: BL_FF, elapsed: Date.now() - room.bl.t0, cash: room.bl.cash, crash: room.bl.crash, ffAt: room.bl.ffAt }, // hidden(터지는 배수)은 절대 내보내지 않는다
+      pk: room.pk && { round: room.pk.round, rounds: room.pk.rounds, zoneOf: room.pk.zoneOf, odds: room.pk.odds, drops: room.pk.drops, since: Date.now() - room.pk.t0 }, // since = 첫 공 출발 후 경과(ms), 도중 입장해도 같은 장면
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
       cn: room.cn, // 코인: 지금까지의 가격 기록·체결 내역뿐 (미래 가격은 서버에도 없다). 도중 입장자도 이걸로 차트를 그린다
       wg: room.wg && wgPublic(room.wg),
@@ -352,6 +354,7 @@ function startDay(room, key) {
   room.nc = game.key === "nunchi" ? { round: 1, rounds: NC_ROUNDS, carry: 0, picks: {}, shown: null } : null;
   room.ip = game.key === "indian" ? { round: 1, rounds: IP_ROUNDS, ids: [], cards: {}, calls: {}, open: false, until: 0 } : null;
   room.au = game.key === "auction" ? auDeal({ round: 1, rounds: AU_ROUNDS, vals: AU_MULTS.map((m) => Math.round(room.cap * m)) }) : null;
+  room.pk = game.key === "plinko" ? { round: 1, rounds: PK_ROUNDS, zoneOf: PK_ZONE_OF, odds: PK_ODDS, drops: null, t0: 0 } : null;
   room.race = null;
   room.result = null;
   room.night = null;
@@ -382,6 +385,7 @@ function checkAllReady(room) {
   if (room.game === "watergun") return wgStart(room);
   if (room.game === "balloon") return blStart(room);
   if (room.game === "coin") return cnStart(room);
+  if (room.game === "plinko") return pkDrop(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -1102,6 +1106,57 @@ function cnSettle(room) {
   }, 6000);
 }
 
+// ---------- 플링코 ----------
+// 핀 10줄 → 칸 11개. 공은 핀마다 50:50으로 튀니까 칸 k(= 오른쪽으로 튄 횟수)에 떨어질 확률 = C(10,k)/1024.
+// 공이 어느 구역에 떨어질지 맞히는 게임: 0 중앙(칸 4~6) · 1 외곽(칸 2·3·7·8) · 2 최외곽(칸 0·1·9·10).
+// 배당 = 0.95 × 1024 ÷ (그 구역의 경우의 수) → 어디에 걸든 기대 환급률 95%. 맞히면 판돈 × 배당, 빗나가면 꽝.
+// 판돈은 블랙잭처럼 me.bets[0], 구역은 p.pkZone(안 골랐으면 중앙). 전원 준비하면 참가자별 경로(좌우 10번)를 뽑아 통째로 내려보내고(베팅은 이미 잠김),
+// 클라이언트가 PK_GAP 간격으로 공을 떨어뜨리는 연출(공 하나 PK_FALL)이 끝날 때쯤 정산한다.
+const PK_ROUNDS = 3;
+const PK_ROWS = 10;
+const PK_EDGE = 0.95;
+const PK_FALL = 3000; // 공 하나가 떨어지는 시간(ms). 클라이언트 PK_FALL과 같아야 함
+const PK_GAP = 400; // 참가자마다 출발 간격(ms). 클라이언트 PK_GAP과 같아야 함
+const pkC = (n, k) => (k ? (pkC(n, k - 1) * (n - k + 1)) / k : 1); // 이항계수 C(n,k)
+const PK_ZONE_OF = Array.from({ length: PK_ROWS + 1 }, (_, k) => { const d = Math.abs(k - PK_ROWS / 2); return d <= 1 ? 0 : d <= 3 ? 1 : 2; }); // 칸 → 구역
+const PK_WAYS = [0, 1, 2].map((z) => PK_ZONE_OF.reduce((n, zz, k) => n + (zz === z ? pkC(PK_ROWS, k) : 0), 0)); // 경우의 수를 직접 센다 (손으로 적은 표가 틀릴 일이 없게)
+const PK_ODDS = PK_WAYS.map((w) => Math.round((PK_EDGE * 2 ** PK_ROWS / w) * 100) / 100);
+
+function pkDrop(room) {
+  const K = room.pk;
+  room.phase = "pkDrop";
+  K.t0 = Date.now();
+  K.drops = [...room.players.values()].filter((p) => p.bets[0]) // 안 건 사람(탄광·빈털터리 포함)은 구경
+    .map((p) => ({ id: p.id, zone: p.pkZone ?? 0, path: Array.from({ length: PK_ROWS }, () => (Math.random() < 0.5 ? 0 : 1)) }));
+  broadcastRoom(room);
+  room.timer = setTimeout(() => pkSettle(room), K.drops.length ? PK_FALL + PK_GAP * (K.drops.length - 1) + 300 : 800); // 전원 구경이면 기다릴 공이 없다
+}
+
+function pkSettle(room) {
+  const K = room.pk, res = { paths: {}, bins: {}, zones: {}, mults: {}, payouts: {} };
+  for (const p of room.players.values()) {
+    const d = K.drops.find((x) => x.id === p.id);
+    if (!d) continue; // 구경꾼·떨어지는 도중에 들어온 사람
+    const bin = d.path.reduce((a, b) => a + b, 0), m = PK_ZONE_OF[bin] === d.zone ? PK_ODDS[d.zone] : 0, bet = p.bets[0]; // m = 적중 배당(빗나가면 0)
+    const win = Math.floor(bet * m + 1e-9); // 100 × 44.22 = 4421.999… 같은 부동소수 오차 보정
+    p.money += win;
+    p.bets = {};
+    res.paths[p.id] = d.path; res.bins[p.id] = bin; res.zones[p.id] = d.zone; res.mults[p.id] = m; res.payouts[p.id] = { bet, win };
+  }
+  room.phase = "result";
+  room.result = res;
+  broadcastRoom(room);
+  room.timer = setTimeout(() => {
+    if (K.round >= K.rounds) return startNight(room);
+    K.round++; K.drops = null;
+    room.phase = "betting";
+    room.result = null;
+    for (const p of room.players.values()) p.ready = false;
+    broadcastRoom(room);
+    checkAllReady(room);
+  }, 5000);
+}
+
 // ---------- 주사위 ----------
 // 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
 // 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
@@ -1272,6 +1327,7 @@ function handleMessage(ws, msg) {
     room.au = null;
     room.wg = null;
     room.cn = null;
+    room.pk = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     room.bl = null;
     broadcastRoom(room);
@@ -1309,6 +1365,10 @@ function handleMessage(ws, msg) {
     pgAction(room, me, msg.a);
   } else if (msg.type === "wgAct") {
     wgAct(room, me, msg.a);
+  } else if (msg.type === "pkZone") { // 공이 떨어질 구역 0 중앙 · 1 외곽 · 2 최외곽. 준비(베팅 잠김) 전까지만 바꿀 수 있다
+    if (!canBet || !room.pk || ![0, 1, 2].includes(msg.v)) return;
+    me.pkZone = msg.v;
+    broadcastRoom(room);
   } else if (msg.type === "bj") {
     bjAction(room, me, msg.a);
   } else if (msg.type === "beg") {
@@ -1773,6 +1833,48 @@ if (process.argv.includes("--check")) {
   handleMessage(c3, { type: "leave" });
   assert(!rooms.has(cr3.code) && cr3.timer._destroyed, "빈 방의 틱 타이머가 살아 있음"); // _destroyed = clearTimeout된 Timeout (Node 내부 필드)
   delete process.env.GAME;
+
+  // 플링코: 칸→구역, 구역별 경우의 수(C(10,k)의 합)·배당·기대 환급률 + 짜고 떨어뜨린 한 판
+  // (최외곽에 걸고 전부 오른쪽 → 10번 칸 적중 x44.22 / 중앙(기본)에 걸고 5번 칸 적중 x1.45 / 외곽에 걸었는데 5번 칸 → 꽝)
+  assert.deepStrictEqual(PK_ZONE_OF, [2, 2, 1, 1, 0, 0, 0, 1, 1, 2, 2]);
+  assert.deepStrictEqual(PK_WAYS, [672, 330, 22]);
+  assert(PK_WAYS.reduce((a, b) => a + b) === 2 ** PK_ROWS, "구역이 모든 칸을 빠짐없이 덮어야 함");
+  PK_ODDS.forEach((o, z) => assert(Math.abs((o * PK_WAYS[z]) / 2 ** PK_ROWS - PK_EDGE) <= 0.01, "플링코 " + z + "번 구역 환급률이 어긋남"));
+  console.log("플링코 배당", PK_ODDS.map((o, z) => ["중앙", "외곽", "최외곽"][z] + " " + ((PK_WAYS[z] / 2 ** PK_ROWS) * 100).toFixed(1) + "%→x" + o).join(" "));
+  process.env.GAME = "plinko";
+  const pkFake = () => ({ id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} });
+  const pk1 = pkFake(), pk2 = pkFake(), pk3 = pkFake();
+  handleMessage(pk1, { type: "create", name: "K1" });
+  handleMessage(pk2, { type: "join", id: pk1.room.code, name: "K2" });
+  handleMessage(pk3, { type: "join", id: pk1.room.code, name: "K3" });
+  handleMessage(pk1, { type: "start" });
+  const pkr = pk1.room, PK1 = pkr.players.get(pk1), PK2 = pkr.players.get(pk2), PK3 = pkr.players.get(pk3);
+  assert(pkr.game === "plinko" && pkr.cap === 100 && pkr.pk.odds.length === 3 && pkr.pk.zoneOf.length === PK_ROWS + 1);
+  handleMessage(pk1, { type: "pkZone", v: 2 });
+  handleMessage(pk1, { type: "pkZone", v: 3 });   // 없는 구역
+  handleMessage(pk1, { type: "pkZone", v: "0" }); // 문자열도 무시
+  handleMessage(pk3, { type: "pkZone", v: 1 });
+  handleMessage(pk1, { type: "bet", i: 0, amount: 999 });
+  handleMessage(pk2, { type: "bet", i: 0, amount: 50 });
+  handleMessage(pk3, { type: "bet", i: 0, amount: 50 });
+  handleMessage(pk2, { type: "ready", v: true });
+  handleMessage(pk2, { type: "pkZone", v: 2 });   // 준비하면 잠김 → 기본(중앙) 그대로
+  assert(PK1.pkZone === 2 && PK2.pkZone === undefined && PK1.bets[0] === 100 && PK1.money === 900);
+  handleMessage(pk3, { type: "ready", v: true });
+  handleMessage(pk1, { type: "ready", v: true });
+  assert(pkr.phase === "pkDrop" && pkr.pk.drops.length === 3 && pkr.pk.drops.every((d) => d.path.length === PK_ROWS && d.path.every((v) => v === 0 || v === 1)));
+  assert.deepStrictEqual(pkr.pk.drops.map((d) => d.zone), [2, 0, 1]);
+  handleMessage(pk1, { type: "pkZone", v: 0 });   // 공이 떨어지는 중에도 무시
+  assert(PK1.pkZone === 2);
+  clearTimeout(pkr.timer);
+  pkr.pk.drops[0].path = Array(PK_ROWS).fill(1); // 전부 오른쪽 → 10번 칸(최외곽)
+  pkr.pk.drops[1].path = pkr.pk.drops[2].path = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1]; // 5번 칸(중앙)
+  pkSettle(pkr);
+  clearTimeout(pkr.timer);
+  assert(pkr.phase === "result" && pkr.result.bins[PK1.id] === 10 && pkr.result.zones[PK3.id] === 1 && pkr.result.mults[PK3.id] === 0);
+  assert(PK1.money === 900 + 4422 && PK2.money === 950 + 72 && PK3.money === 950 && pkr.result.payouts[PK1.id].win === 4422 && !PK1.bets[0], "최외곽 적중 $100×44.22, 중앙 적중 $50×1.45(내림), 빗나가면 0");
+  delete process.env.GAME;
+  rooms.delete(pkr.code);
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);

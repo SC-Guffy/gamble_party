@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>우당탕 도박 일주일</title>
+<title>뒷방 한탕</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Rubik:wght@400;600;800&display=swap">
 <style>
   :root{
@@ -43,10 +43,12 @@
   .conn-banner{font-family:var(--font-display);font-size:11px;color:var(--ink-dim);background:var(--panel);border:1px solid var(--panel-edge);border-radius:999px;padding:8px 16px}
   .conn-banner.ok{color:var(--good)}
   .conn-banner.err{color:var(--bad)}
-  /* 타이틀/대기실: 밝은 초원 배경 위에 어두운 카드 */
-  .sky-text{color:#fff;text-shadow:0 2px 0 #161320}
-  #screen-home h1.title,#screen-lobby h1.title{text-shadow:0 4px 0 #161320,0 0 24px rgba(0,0,0,.35)}
-  .home-card{width:100%;max-width:440px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:12px;padding:18px 16px;border-radius:20px;background:rgba(20,19,31,.8);border:2px solid rgba(255,255,255,.14);box-shadow:0 10px 0 rgba(0,0,0,.18)}
+  /* 타이틀/대기실: 담배 연기 자욱한 뒷방 위에 네온 간판 + 어두운 카드 */
+  .sky-text{color:#f3dcb8;text-shadow:0 2px 0 #161320}
+  #screen-home h1.title{color:#fff2d6;text-shadow:0 0 6px #ff9a3c,0 0 20px #ff6a1a,0 4px 0 #161320}
+  #screen-home h1.title span{color:#ff6b7d;text-shadow:0 0 6px #ff2d55,0 0 24px #ff2d55,0 4px 0 #161320;animation:neon 5s infinite}
+  @keyframes neon{0%,17%,21%,23%,60%,62%,100%{opacity:1}19%,22%,61%{opacity:.3}} /* 고장 난 네온사인처럼 가끔 깜빡 */
+  .home-card{width:100%;max-width:440px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:12px;padding:18px 16px;border-radius:20px;background:rgba(22,15,11,.84);border:2px solid rgba(255,190,120,.16);box-shadow:0 10px 0 rgba(0,0,0,.3),0 0 40px rgba(0,0,0,.5)}
   .join-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;width:100%}
   #nickname,#room-title{font-family:var(--font-body);font-weight:600;font-size:17px;text-align:center;box-sizing:border-box;padding:12px 10px;border-radius:14px;border:2px solid var(--panel-edge);background:var(--panel);color:var(--ink)}
   #nickname{width:200px}
@@ -73,6 +75,11 @@
   #lobby-players{display:flex;flex-direction:column;gap:8px;width:100%;max-width:300px}
   #lobby-players .pchip{font-size:16px;padding:12px 14px}
   #lobby-players .empty{opacity:.4;border-style:dashed}
+  #days-pick{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+  #days-pick button{font-family:var(--font-display);font-size:11px;padding:10px 12px;border-radius:10px;border:2px solid var(--panel-edge);background:var(--panel);color:var(--ink-dim);cursor:pointer}
+  #days-pick button.on{border-color:var(--gold);color:var(--gold);background:#2b2844}
+  #days-pick button:disabled{cursor:default}
+  #days-pick button:disabled:not(.on){opacity:.4}
 
   #screen-game{padding:0;gap:0;align-items:stretch;justify-content:flex-start;overflow:hidden}
   #hud{flex:none;display:flex;align-items:center;gap:8px;padding:8px 10px;padding-top:calc(8px + env(safe-area-inset-top,0px));overflow-x:auto}
@@ -199,7 +206,6 @@
   .vp .mk{font-size:13px}
   #vote-main{margin-block:auto;width:100%;max-width:680px;display:flex;flex-direction:column;align-items:center;gap:10px}
   #vote-title{margin:0;font:italic 800 clamp(22px,4.4vw,34px)/1.2 var(--font-body);color:#fff;text-shadow:0 2px 14px rgba(80,180,255,.55)}
-  #vote-timer{display:inline-block;min-width:1.3em;margin-left:.3em;text-align:left;color:var(--gold)}
   #vote-sub{margin:0 0 6px;font-size:13px;color:#b9d4f2}
   #vote-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(8px,2.6vw,26px);width:100%}
   .vote-opt{cursor:pointer;border:2px solid rgba(150,205,255,.45);background:#0b1e3c;transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease,opacity .3s ease}
@@ -226,13 +232,10 @@
   #vote-random .vicon{width:36px;height:36px;font-size:17px;margin:0}
   #vote-random b{flex:none;font-size:15px}
   #vote-random .vbar{flex:1;margin:0}
-  #vote-ready{margin-top:8px;min-width:180px;padding:12px 30px;font-weight:800;font-size:16px;color:#fff;background:rgba(20,44,78,.85);border:2px solid rgba(150,205,255,.45);border-radius:6px;cursor:pointer}
-  #vote-ready.on{background:#1d8f5a;border-color:var(--good)}
-  #vote-ready:disabled{opacity:.45;cursor:not-allowed}
   @media (max-width:1320px){ #vote-day,#vote-players{position:static} #vote-players{flex-direction:row;flex-wrap:wrap;justify-content:center} .vp{min-width:0} }
   @media (max-width:719px){ .vcard small{display:none} .vicon{width:34px;height:34px;font-size:17px;margin-bottom:3px} .vbar{width:88%} #vote-random{gap:8px;padding-right:12px} #vote-random b{font-size:13px} }
 
-  @media (prefers-reduced-motion: reduce){ .beg,#btn-beg{animation:none} button.btn{transition:none} }
+  @media (prefers-reduced-motion: reduce){ .beg,#btn-beg,#screen-home h1.title span{animation:none} button.btn{transition:none} }
 </style>
 </head>
 <body>
@@ -241,10 +244,10 @@
   <canvas id="home-bg"></canvas>
 
   <section id="screen-home" class="screen">
-    <div class="eyebrow sky-text">최대 4인 베팅 파티 게임 · 서버 멀티플레이</div>
-    <h1 class="title">우당탕<br><span>도박</span> 일주일</h1>
+    <div class="eyebrow sky-text">최대 4인 · 온라인 도박 파티</div>
+    <h1 class="title">뒷방<br><span>한탕</span></h1>
     <div class="home-card">
-      <p class="tagline" style="font-size:13.5px">가진 돈은 단돈 $1000. 일주일 안에 세계 최강의 부자가 되어라! 낮에는 도박, 밤에는 정산. 파산하면 한푼 줍쇼… 아무도 안 주면 아오지 탄광행.</p>
+      <p class="tagline" style="font-size:15px">$1000 들고 앉아라. 제일 많이 딴 사람이 형님.</p>
       <div class="conn-banner" id="conn-banner">서버에 연결하는 중...</div>
       <input id="nickname" maxlength="10" placeholder="닉네임" autocomplete="off">
       <div class="join-row">
@@ -261,7 +264,9 @@
       <div class="eyebrow">대기실</div>
       <div class="room-code" id="room-title-display"></div>
       <div id="lobby-players"></div>
-      <p class="tagline" style="font-size:13px">친구들은 타이틀 화면의 방 목록에서 이 방을 눌러 들어와요. 혼자서도 시작할 수 있고, 게임 도중에도 입장할 수 있어요.</p>
+      <div class="eyebrow">진행 일수 · 방장이 정해요</div>
+      <div id="days-pick"></div>
+      <p class="tagline" style="font-size:13px">친구는 방 목록에서 입장 · 시작은 👑 방장</p>
       <div class="btn-row">
         <button class="btn" id="btn-start">시작하기</button>
         <button class="btn ghost" id="btn-leave">방 나가기</button>
@@ -273,11 +278,10 @@
     <div id="vote-day"></div>
     <div id="vote-players"></div>
     <div id="vote-main">
-      <h2 id="vote-title">게임 선택<span id="vote-timer"></span></h2>
+      <h2 id="vote-title">게임 선택</h2>
       <p id="vote-sub"></p>
       <div id="vote-cards"></div>
       <button class="vote-opt" id="vote-random" data-i="3"><span class="vicon">?</span><b>무작위 게임</b><span class="vbar"></span><span class="vcnt"></span></button>
-      <button id="vote-ready">준비</button>
     </div>
   </section>
 
@@ -331,7 +335,7 @@
       </div>
       <div id="panel-final" hidden>
         <div id="final-title"></div>
-        <canvas class="chart" id="final-chart" aria-label="일주일 자산 변동 그래프"></canvas>
+        <canvas class="chart" id="final-chart" aria-label="전체 기간 자산 변동 그래프"></canvas>
         <div class="rows" id="final-rows"></div>
         <div class="btn-row"><button class="btn" id="btn-again">대기실로 돌아가기</button><button class="btn ghost" id="btn-leave2">방 나가기</button></div>
       </div>
@@ -355,6 +359,7 @@
 
   const TRACK = 1000, DT = 0.1, REF_SPEED = 45; // TRACK/DT는 서버와 같아야 함
   const ALMS = 100;
+  const DAY_OPTS = [3,5,7,10,14]; // 대기실 진행 일수 버튼 (서버는 1~30 아무거나 받는다)
   const PCOL = ["#5ec8f8","#ffb84d","#7bd88f","#cd8bf0"];
   const COND = ["🤒 최악","😟 별로","😐 보통","😊 좋음","🔥 최상"];
   // cad: 최고 속도일 때 초당 걸음(도약) 수, fx: 서버가 fx=1을 보낼 때 머리 위에 띄우는 말
@@ -534,6 +539,14 @@
     drawBox(g,0.5,11+hd,0,5,5,4,skin);
     drawBox(g,1.5,13.2+hd,0,1,1,0,K); drawBox(g,3.5,13.2+hd,0,1,1,0,K);
     if(pose === "cheer") drawBox(g,2,11.6+hd,0,2,1.2,0,"#7a2030"); else drawBox(g,2.2,12+hd,0,1.6,0.5,0,pose === "sad" || kneel ? "#7a2030" : K);
+    if(look.beard){ // 타이틀 배경 아저씨 전용: 구레나룻부터 가슴까지 덥수룩한 수염 + 콧수염 + 굵은 눈썹 (눈은 가리지 않게 얇게)
+      const bc = look.beard;
+      drawBox(g,0.2,9.6+hd,-0.4,5.6,3,1,bc); drawBox(g,1,8.8+hd,-0.4,4,0.8,1,bc); drawBox(g,2,8.2+hd,-0.4,2,0.6,1,bc);
+      drawBox(g,0.2,12.6+hd,-0.4,0.9,2.2,1,bc); drawBox(g,4.9,12.6+hd,-0.4,0.9,2.2,1,bc);
+      drawBox(g,2.2,11+hd,-0.5,1.6,0.5,0,"#3a1a14"); drawBox(g,1.2,11.7+hd,-0.5,3.6,0.9,0,shade(bc,0.72));
+      drawBox(g,1.1,14.3+hd,0,1.8,0.6,0,bc); drawBox(g,3.1,14.3+hd,0,1.8,0.6,0,bc);
+    }
+    if(look.cig){ drawBox(g,4.2,11.1+hd,-0.6,2.6,0.5,0,"#efe9dc"); drawBox(g,6.8,11.1+hd,-0.6,0.6,0.5,0,S(t*2.3) > 0.7 ? "#ffd27a" : "#e8532a"); } // 담배 (끝이 빨갛게 탄다)
     if(pose === "mine"){ drawBox(g,0.2,hy-1,-0.3,5.6,2,4.6,"#f5c518"); drawBox(g,2.3,hy-0.6,-0.3,1.4,1,0,"#fff8c9"); }
     else if(look.hair === 1){ drawBox(g,0.5,hy-0.4,0,5,0.5,4,hc); drawBox(g,2.4,hy,0.3,1.2,2.6,3.4,hc); }
     else if(look.hair === 3){ drawBox(g,0.3,hy-0.6,-1.6,5.4,0.6,1.4,hc); drawBox(g,0.3,hy-0.6,-0.2,5.4,1.9,4.4,hc); }
@@ -789,14 +802,20 @@
     $("bet-actions").hidden = dice && r.phase !== "betting";
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -835,8 +854,8 @@
     chatInput.value = "";
   });
 
-  function chipHTML(p, withReady){
-    return '<div class="pchip' + (p.id===myId?" me":"") + '"><img src="'+avatarURL(p.look)+'" alt=""><i style="background:' + PCOL[p.color] + '"></i>' + esc(p.name) +
+  function chipHTML(p, withReady, host){
+    return '<div class="pchip' + (p.id===myId?" me":"") + '"><img src="'+avatarURL(p.look)+'" alt=""><i style="background:' + PCOL[p.color] + '"></i>' + (host ? "👑" : "") + esc(p.name) +
       ' <span class="money">$' + p.money + '</span>' + (p.mining ? "⛏️" : withReady && p.ready ? '<span class="rdy">✔</span>' : "") + (p.begging ? "🥺" : "") + "</div>";
   }
   function renderRoomList(msg){
@@ -848,9 +867,13 @@
   }
   function renderLobby(){
     $("room-title-display").textContent = room.title;
-    let html = room.players.map((p) => chipHTML(p)).join("");
+    let html = room.players.map((p, i) => chipHTML(p, false, i === 0)).join("");
     for(let i=room.players.length;i<4;i++) html += '<div class="pchip empty">빈 자리</div>';
     $("lobby-players").innerHTML = html;
+    const host = room.players[0].id === myId; // 방장 = 제일 먼저 들어온 사람 (서버 hostOf와 같음)
+    $("days-pick").innerHTML = DAY_OPTS.map((n) => '<button data-n="'+n+'"'+(n === room.days ? ' class="on"' : "")+(host ? "" : " disabled")+">"+n+"일</button>").join("");
+    $("btn-start").disabled = !host;
+    $("btn-start").textContent = host ? room.days + "일 시작하기" : "방장 기다리는 중…";
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
@@ -1172,6 +1195,7 @@
     sendMsg({type:"join", id:el.dataset.id, name:myName()});
   });
   $("btn-start").addEventListener("click", () => { ensureAudio(); sendMsg({type:"start"}); });
+  $("days-pick").addEventListener("click", (e) => { const b = e.target.closest("button"); if(b && !b.disabled){ sfxChip(); sendMsg({type:"days", n:Number(b.dataset.n)}); } });
   const leave = () => { sendMsg({type:"leave"}); room = null; setInRoom(false); show("home"); };
   $("btn-leave").addEventListener("click", leave);
   $("btn-leave2").addEventListener("click", leave);
@@ -1198,11 +1222,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1474,7 +1498,8 @@
     });
   }
 
-  // ---------- 타이틀/대기실 배경: 파란 하늘 + 초원을 가로질러 달리는 출전 동물들 ----------
+  // ---------- 타이틀/대기실 배경: 담배 연기 자욱한 뒷방 화투판 ----------
+  // 수염 덥수룩한 아저씨들이 초록 펠트 테이블에 둘러앉아 담배를 태운다. 가운데는 타이틀 카드에 가리니까 양옆에 앉힌다.
   const bg = $("home-bg"), bgx = bg.getContext("2d");
   let BW = 0, BH = 0;
   function resizeBg(){
@@ -1484,76 +1509,103 @@
     bgx.setTransform(dpr,0,0,dpr,0,0);
   }
   window.addEventListener("resize", resizeBg);
-  const BASE_V = {horse:1.15, chicken:0.95, rabbit:1.25, pig:0.9, frog:1, turtle:0.3, penguin:1.1, elephant:0.85};
-  // depth 0=지평선 근처(작고 느림) ~ 1=화면 앞(크고 빠름). 먼 것부터 그리도록 정렬해 둔다
-  const runners = Object.keys(INFO).map((key,i) => ({key:key, depth:(i*5%8)/7, x:Math.random()*1400-300, c:Math.random(), seed:i*3.7}))
-    .sort((a,b) => a.depth-b.depth);
-  // 경주에서 하는 짓을 배경에서도 가끔 한다: 거북이 터보, 토끼 낮잠, 닭 푸드덕, 개구리 웅크림↔폴짝
-  function runnerState(r, now){
-    const t = now + r.seed;
-    if(r.key === "turtle" && t%11 < 2.2) return {v:1.5, fx:1, f:0};
-    if(r.key === "rabbit" && t%13 < 2.5) return {v:0, fx:1, f:0};
-    if(r.key === "chicken" && t%7 < 1.2) return {v:1.6, fx:1, f:0};
-    if(r.key === "frog"){ const p = t%1.4; return p<0.5 ? {v:0.08, fx:1, f:0} : {v:1.9, fx:0, f:(p-0.5)/0.9}; }
-    return {v:BASE_V[r.key], fx:0, f:0};
+  // look = drawPerson 형식 + beard(수염색)·cig(담배). x = 화면 폭 비율. say = 가끔 외치는 말("!"로 끝나면 벌떡 일어난다)
+  const GEEZERS = [
+    {x:0.08, look:{top:7, bottom:1, hair:3, hairColor:1, skin:1, beard:"#3a2a20", cig:1}, say:["고!","스톱…","광 팔아!"]},
+    {x:0.26, look:{top:3, bottom:0, hair:0, hairColor:4, skin:2, beard:"#cfc9bf", cig:1}, say:["크으~","피박이다!","에잇 퉤"]},
+    {x:0.74, look:{top:1, bottom:1, hair:5, hairColor:0, skin:0, beard:"#1b1420"}, say:["올인!","한 판 더?","콜!"]},
+    {x:0.92, look:{top:6, bottom:2, hair:0, hairColor:0, skin:3, beard:"#4a3a2e", cig:1}, say:["다이…","따당!","흔들고!"]}
+  ];
+  const smoke = []; // 담배 연기 {x, y, vx, vy, r, age, life, seed}. big = 후우~ 하고 내뿜는 한 모금
+  function puff(x, y, k, big){
+    if(smoke.length < 400) smoke.push({x:x, y:y, vx:(big ? 16 : 3)*k*(Math.random()-0.3), vy:-(big ? 5 : 12+Math.random()*8)*k, r:(big ? 5 : 1.5)*k, age:0, life:4+Math.random()*3, seed:Math.random()*T});
   }
   function drawHome(now, dt){
-    const g = bgx, W = BW, H = BH, hz = H*0.36, k = clamp(Math.min(W,H)/420, 0.85, 1.7);
-    const sky = g.createLinearGradient(0,0,0,hz);
-    sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
-    g.fillStyle = sky; g.fillRect(0,0,W,hz+2);
-    // 해
-    g.fillStyle = "rgba(255,246,170,.35)"; g.beginPath(); g.arc(W*0.84, hz*0.3, 46*k+4*S(now*1.5), 0, T); g.fill();
-    g.fillStyle = "#fff3a0"; g.beginPath(); g.arc(W*0.84, hz*0.3, 30*k, 0, T); g.fill();
-    // 네모난 구름이 천천히 흘러간다
-    for(let i=0;i<6;i++){
-      const s = (9+(i%3)*5)*k, cx = ((i*397 + now*(7+i*3)) % (W+40*s)) - 20*s, cy = hz*(0.14+0.14*(i%4));
-      g.fillStyle = "rgba(160,205,235,.55)"; g.fillRect(cx, cy+s*1.6, 7*s, s*0.5);
-      g.fillStyle = "#fff"; g.fillRect(cx, cy, 7*s, 1.7*s); g.fillRect(cx+1.2*s, cy-s, 3*s, s); g.fillRect(cx+3.4*s, cy-1.7*s, 2.4*s, 1.7*s);
+    const g = bgx, W = BW, H = BH, k = clamp(Math.min(W,H)/420, 0.85, 1.7), u = 5.5*k;
+    const tall = H > W*1.4, tb = H*(tall ? 0.84 : 0.64), tf = H*(tall ? 0.96 : 0.8); // 테이블 뒷변/앞변. 세로 화면은 카드 아래로 내린다
+    const ty = tb+4*u, ly = tb-14*u-60*k; // 아저씨 발(테이블에 가려 허리 위만 보임), 전등 갓 아랫단
+    const lamps = [0.17,0.5,0.83].map((f,i) => ({bx:W*f, x:W*f+S(now*0.7+i*2)*5*k})); // 천장에 매달려 살랑살랑
+    // 벽(나무 판자) + 바닥
+    const wall = g.createLinearGradient(0,0,0,tb); wall.addColorStop(0,"#140e0a"); wall.addColorStop(1,"#33241a");
+    g.fillStyle = wall; g.fillRect(0,0,W,tb+1);
+    g.fillStyle = "rgba(0,0,0,.25)"; for(let x=(W/2)%(64*k); x<W; x+=64*k) g.fillRect(x,0,2*k,tb);
+    g.fillStyle = "#0d0907"; g.fillRect(0,tb,W,H-tb);
+    // 아저씨들 (테이블보다 먼저 → 아랫도리는 테이블에 가린다)
+    const talk = [];
+    for(const m of GEEZERS){
+      const seed = m.x*37, t = now+seed, cx = W*m.x, say = t%9 < 2.4 && m.say[Math.floor(t/9)%m.say.length];
+      const pose = say && say.endsWith("!") ? "cheer" : "idle", lift = pose === "cheer" ? Math.abs(S(t*7))*3 : 0, mouthY = ty-(11.1+lift)*u;
+      drawPerson(g, m.look, cx, ty, u, pose, now, seed);
+      if(m.look.cig){
+        if(Math.random() < dt*7) puff(cx+3.8*u, mouthY, k, false); // 담배 끝에서 가늘게
+        if(t%6.5 < dt) for(let j=0;j<5;j++) puff(cx+3*u, mouthY, k, true); // 후우~
+      }
+      if(say) talk.push([say, cx, ty-(20+lift)*u]);
     }
-    // 언덕 두 겹
-    [["#6dbb5d",26,0.006,1,20],["#7fca58",14,0.009,4,6]].forEach((h) => {
-      g.fillStyle = h[0]; g.beginPath(); g.moveTo(0,hz+4);
-      for(let x=0;x<=W+20;x+=20) g.lineTo(x, hz - h[4]*k - h[1]*k*(S(x*h[2]/k+h[3]) + 0.4*S(x*h[2]*2.7/k)));
-      g.lineTo(W+20,hz+4); g.fill();
+    // 테이블: 나무 테두리 + 초록 펠트 (앞으로 올수록 넓어지는 원근)
+    const quad = (y0,y1,x0,x1,col) => { g.fillStyle = col; g.beginPath(); g.moveTo(x0,y0); g.lineTo(W-x0,y0); g.lineTo(W-x1,y1); g.lineTo(x1,y1); g.fill(); };
+    quad(tb-6*k, tf+6*k, W*0.02, -W*0.04, "#5a3520");
+    const felt = g.createLinearGradient(0,tb,0,tf); felt.addColorStop(0,"#15482a"); felt.addColorStop(1,"#1f6b3c");
+    quad(tb, tf, W*0.02+8*k, -W*0.04+10*k, felt);
+    g.fillStyle = "#2c1a0e"; g.fillRect(0, tf+6*k, W, 28*k);
+    g.fillStyle = "#7a4a2a"; g.fillRect(0, tf+6*k, W, 2*k);
+    // 판 위: 각자 앞에 화투 패 + 칩, 소주병, 재떨이
+    const prop = (x, y, s, fn) => { g.save(); g.translate(x, y); g.scale(s, s); fn(); g.restore(); };
+    const py = tb+(tf-tb)*0.4, pu = u*0.7;
+    GEEZERS.forEach((m, i) => prop(W*m.x-5*pu, py, pu, () => {
+      for(let j=0;j<3;j++) drawBox(g, j*2.6, 0, j*0.5, 2.2, 0.3, 3.2, j === 1 && i%2 ? "#f2ede0" : "#b8322a");
+      for(let j=0;j<3+i;j++) drawBox(g, 9, j*0.8, 1, 2.6, 0.8, 2.6, j%2 ? "#e8443a" : "#f2f2ee");
+    }));
+    prop(W*GEEZERS[1].x+8*u, py-2*k, pu, () => { // 소주
+      drawBox(g,0,0,0,2.4,5,2.4,"#2e8b57"); drawBox(g,0.4,5,0.4,1.6,1,1.6,"#2e8b57"); drawBox(g,0.7,6,0.7,1,1.6,1,"#2e8b57");
+      drawBox(g,0.6,7.6,0.6,1.2,0.6,1.2,"#9aa5b1"); drawBox(g,0,1.4,0,2.4,2,0,"#f2f2ee"); drawBox(g,3.4,0,0.4,1.6,1.8,1.6,"#cfe8ef");
     });
-    // 초원
-    g.fillStyle = "#8fd14f"; g.fillRect(0,hz,W,H-hz);
-    g.fillStyle = "#86c747";
-    for(let x=0;x<W;x+=180*k) g.fillRect(x,hz,90*k,H-hz);
-    for(let i=0;i<7;i++){ // 지평선의 복셀 나무
-      const tu = (2+(i%3)*0.5)*k;
-      g.save(); g.translate((i*211+40)%Math.max(W,1), hz+8+(i%3)*9*k); g.scale(tu,tu);
-      drawBox(g,2,0,2,2,4,2,"#7a4f2a"); drawBox(g,0,4,0,6,5,6,"#3f9b3a"); drawBox(g,1,9,1,4,3,4,"#4cae45");
-      g.restore();
+    const ash = {x:W*GEEZERS[2].x-10*u, y:py+4*k};
+    prop(ash.x, ash.y, pu, () => { drawBox(g,0,0,0,4.4,1,4.4,"#8d949c"); drawBox(g,1,1,1.2,2,0.4,0.5,"#efe9dc"); drawBox(g,2.4,1,2,1.6,0.4,0.5,"#efe9dc"); });
+    if(Math.random() < dt*4) puff(ash.x+2.5*pu, ash.y-2*pu, k, false); // 재떨이에 걸쳐 둔 꽁초
+    // 어둠: 가운데(판) 빼고 가장자리로 갈수록 캄캄하게
+    const R = H*0.72, sx = W*0.75/R;
+    g.save(); g.translate(W/2, tb); g.scale(sx, 1);
+    const vg = g.createRadialGradient(0,0,R*0.2,0,0,R); vg.addColorStop(0,"rgba(8,5,3,0)"); vg.addColorStop(1,"rgba(8,5,3,.9)");
+    g.fillStyle = vg; g.fillRect(-W/2/sx, -tb, W/sx, H); g.restore();
+    // 전등 불빛: 원뿔 + 판 위에 떨어지는 동그란 빛 (더하기 합성)
+    g.globalCompositeOperation = "lighter";
+    for(const l of lamps){
+      const spread = Math.max(W*0.15, 80*k), cone = g.createLinearGradient(0,ly,0,tf);
+      cone.addColorStop(0,"rgba(255,196,110,.2)"); cone.addColorStop(1,"rgba(255,196,110,0)");
+      g.fillStyle = cone; g.beginPath(); g.moveTo(l.x-24*k,ly); g.lineTo(l.x+24*k,ly); g.lineTo(l.x+spread,tf); g.lineTo(l.x-spread,tf); g.fill();
+      g.save(); g.translate(l.x, (tb+tf)/2); g.scale(1, 0.35);
+      const pool = g.createRadialGradient(0,0,0,0,0,spread); pool.addColorStop(0,"rgba(255,210,130,.2)"); pool.addColorStop(1,"rgba(255,210,130,0)");
+      g.fillStyle = pool; g.fillRect(-spread,-spread,spread*2,spread*2); g.restore();
     }
-    const petals = ["#fff","#ffdd7a","#ff8fb0","#cd8bf0"];
-    for(let i=0;i<46;i++){ // 바람에 살랑이는 꽃
-      const d = ((i*61)%100)/100, fx = (i*173)%Math.max(W,1), fy = hz+16*k+d*(H-hz-24*k), fs = (1.6+d*2.6)*k, sway = S(now*2+i)*fs*0.6;
-      g.fillStyle = "#4e9a34"; g.fillRect(fx, fy-fs*2.5, fs*0.7, fs*2.5);
-      g.fillStyle = petals[i%4]; g.fillRect(fx-fs*0.7+sway, fy-fs*4, fs*2.1, fs*1.7);
+    g.globalCompositeOperation = "source-over";
+    // 전등: 전깃줄 + 초록 갓 + 불빛 새는 아랫단
+    for(const l of lamps){
+      g.strokeStyle = "#050302"; g.lineWidth = 2*k; g.beginPath(); g.moveTo(l.bx,0); g.lineTo(l.x,ly-18*k); g.stroke();
+      g.fillStyle = "#1f4d2e"; g.beginPath(); g.moveTo(l.x-9*k,ly-18*k); g.lineTo(l.x+9*k,ly-18*k); g.lineTo(l.x+26*k,ly); g.lineTo(l.x-26*k,ly); g.fill();
+      g.fillStyle = "#2c6b40"; g.fillRect(l.x-9*k, ly-18*k, 6*k, 3*k);
+      g.fillStyle = "#fff1c4"; g.fillRect(l.x-20*k, ly, 40*k, 3*k);
     }
-    // 동물들: 왼쪽 → 오른쪽으로 달려 나가면 다시 왼쪽에서 등장
-    for(const r of runners){
-      const st = runnerState(r, now), u = (1.7+r.depth*3.1)*k, len = LEN[r.key]*u;
-      r.x += st.v*17*u*dt; r.c += dt*INFO[r.key].cad*Math.min(2, st.v);
-      if(r.x > W+20) r.x = -len-40-Math.random()*260;
-      const y = hz+34*k+r.depth*(H-hz-52*k);
-      if(st.v > 1.45){
-        g.strokeStyle = "rgba(255,255,255,.85)"; g.lineWidth = 2; g.beginPath();
-        for(let j=0;j<3;j++){ const ly = y-(2+j*3.5)*u, lx = r.x-(4+((now*9+j*3)%6))*u; g.moveTo(lx,ly); g.lineTo(lx-7*u,ly); }
-        g.stroke();
-      }
-      drawAnimal(g, r.key, r.x, y, u, r.c, st.v, st.fx, {f:st.f, v:st.v, now:now});
-      if(st.fx && INFO[r.key].fx){
-        g.font = "800 "+Math.max(11,u*4.5)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
-        g.lineWidth = 4; g.strokeStyle = "#1b1420"; g.fillStyle = "#fff";
-        g.strokeText(INFO[r.key].fx, r.x+len/2, y-19*u+S(now*6)*3); g.fillText(INFO[r.key].fx, r.x+len/2, y-19*u+S(now*6)*3);
-      }
+    // 연기: 올라가면서 부풀고 흩어진다
+    for(let i=smoke.length-1;i>=0;i--){
+      const s = smoke[i]; s.age += dt;
+      if(s.age > s.life){ smoke.splice(i,1); continue; }
+      s.x += (s.vx+S(now*1.3+s.seed)*7*k)*dt; s.y += s.vy*dt; s.vx *= 0.99; s.r += 5*k*dt;
+      g.fillStyle = "rgba(215,208,196,"+(0.15*(1-s.age/s.life)*Math.min(1, s.age*3)).toFixed(3)+")";
+      g.beginPath(); g.arc(s.x, s.y, s.r, 0, T); g.fill();
     }
+    // 천장 밑에 고인 뿌연 연기층
+    for(let i=0;i<6;i++){
+      const hr = (150+i*30)*k, hx = ((i*263+now*(5+i*2)) % (W+2*hr)) - hr, hy = H*(0.12+0.09*(i%4)), hz = g.createRadialGradient(hx,hy,0,hx,hy,hr);
+      hz.addColorStop(0,"rgba(200,190,172,.08)"); hz.addColorStop(1,"rgba(200,190,172,0)");
+      g.fillStyle = hz; g.fillRect(hx-hr,hy-hr,hr*2,hr*2);
+    }
+    // 외치는 말
+    g.font = "800 "+Math.max(12,u*3)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 4; g.strokeStyle = "#1b1420"; g.fillStyle = "#fff";
+    for(const [txt, x, y] of talk){ g.strokeText(txt, x, y); g.fillText(txt, x, y); }
   }
 
-  // 대기실에서는 초원 앞줄에 방 사람들이 서 있다
+  // 대기실에서는 테이블 앞에 방 사람들이 서 있다
   function drawLobbyPeople(now){
     const g = bgx, n = room.players.length, k = clamp(Math.min(BW,BH)/420, 0.85, 1.6), u = 4.2*k, gap = Math.min(BW/(n+0.5), 26*u);
     room.players.forEach((p, i) => {
@@ -1873,22 +1925,21 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
-  let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
+  let roll = null; // 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
   function buildVote(){
     $("vote-cards").innerHTML = room.vote.options.map((k,i) => '<button class="vote-opt vcard" data-i="'+i+'"><canvas data-k="'+k+'"></canvas><span class="vicon">'+GINFO[k].icon+"</span><b>"+GINFO[k].name+"</b><small>"+GINFO[k].sub+"</small>"+VBAR+"</button>").join("");
     $("vote-random").classList.remove("hl");
     $("vote-main").classList.remove("done");
-    $("vote-sub").textContent = "많이 득표한 게임이 선택될 확률이 높습니다";
     roll = null;
   }
   function renderVote(){
-    const V = room.vote, my = me(), total = sum(V.counts), mine = V.votes[myId];
-    voteEnd = performance.now() + V.left;
+    const V = room.vote, total = sum(V.counts), mine = V.votes[myId], waiting = room.players.filter((p) => !(p.id in V.votes)).length;
+    if(!roll) $("vote-sub").textContent = V.pick != null ? "추첨 중…" : mine == null ? "게임을 누르면 투표 완료 · 전원이 고르면 룰렛이 돕니다" : "다른 사람을 기다리는 중… (" + waiting + "명 남음 · 바꿔 눌러도 돼요)";
     $("vote-day").textContent = "DAY " + (room.day+1);
-    let html = room.players.map((p) => '<div class="vp"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt="">'+esc(p.name)+(p.ready ? '<span class="ok">✔</span>' : "")+"</div>").join("");
+    let html = room.players.map((p) => '<div class="vp"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt="">'+esc(p.name)+(p.id in V.votes ? '<span class="ok">✔</span>' : "")+"</div>").join("");
     for(let i=room.players.length;i<4;i++) html += '<div class="vp empty">△</div>';
     $("vote-players").innerHTML = html;
     document.querySelectorAll(".vote-opt").forEach((el) => {
@@ -1899,10 +1950,6 @@
         return p ? '<i title="'+esc(p.name)+'" style="background:'+PCOL[p.color]+';box-shadow:0 0 8px '+PCOL[p.color]+'"><span>'+MARKS[p.color]+"</span></i>" : "<i></i>"; }).join("");
       el.querySelector(".vcnt").textContent = pct + "%";
     });
-    const b = $("vote-ready");
-    b.disabled = V.pick != null || mine == null;
-    b.textContent = V.pick != null ? "추첨 중…" : my.ready ? "준비 취소" : "준비";
-    b.classList.toggle("on", my.ready && V.pick == null);
     if(V.pick != null && !roll){ // 룰렛: 표를 받은 칸들 사이를 점점 느리게 돌다가 서버가 뽑은 칸에서 멈춘다
       const cand = [0,1,2,3].filter((i) => total ? V.counts[i] : i < 3), m = cand.length, pi = cand.indexOf(V.pick), n = 16;
       roll = {t0: performance.now()/1000, seq: [], at: [], k: -1};
@@ -1911,11 +1958,10 @@
   }
   $("screen-vote").addEventListener("click", (e) => {
     const el = e.target.closest(".vote-opt");
-    if(!el || room.vote.pick != null || me().ready) return;
+    if(!el || room.vote.pick != null) return;
     ensureAudio(); sfxChip();
     sendMsg({type:"vote", i:Number(el.dataset.i)});
   });
-  $("vote-ready").addEventListener("click", () => { ensureAudio(); sendMsg({type:"ready", v:!me().ready}); });
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
@@ -1986,8 +2032,6 @@
       const g = cv.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
       drawArt(g, cv.dataset.k, w, h, now);
     });
-    const left = Math.max(0, Math.ceil((voteEnd-performance.now())/1000)), txt = V.pick != null ? "" : String(left), timer = $("vote-timer");
-    if(timer.textContent !== txt){ if(txt && left <= 5 && left > 0) sfxBeep(); timer.textContent = txt; }
     if(!roll) return;
     let k = roll.k;
     while(k+1 < roll.seq.length && now-roll.t0 >= roll.at[k+1]) k++;

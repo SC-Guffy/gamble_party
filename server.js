@@ -1,5 +1,5 @@
-// 우당탕 도박 일주일 - 서버 기반 4인 베팅 게임 (wasd-tori-server와 같은 뼈대: Node 내장 모듈만 사용)
-// 메타: 각자 $1000으로 시작해 7일 동안 가장 많이 불린 사람이 우승.
+// 뒷방 한탕 - 서버 기반 4인 베팅 게임 (wasd-tori-server와 같은 뼈대: Node 내장 모듈만 사용)
+// 메타: 각자 $1000으로 시작해 방장이 정한 날수(기본 7일) 동안 가장 많이 불린 사람이 우승.
 //   투표 = 랜덤 3개 게임 + 무작위 중에서 골라 득표 비례 확률로 추첨 → 낮 = 그날의 도박 컨텐츠 → 밤 = 정산.
 //   밤에 파산($0)이면 한푼줍쇼 1회. 아무도 안 주면 다음 날은 아오지 탄광(관전만) → 그날 밤 일당 $200.
 // 서버가 돈/베팅/경주 결과를 전부 소유한다. 경주는 출발 순간 서버가 끝까지 미리 시뮬레이션해서
@@ -49,10 +49,12 @@ const wss = new WSServer({ server });
 const MAX_PLAYERS = 4;
 const START_MONEY = Number(process.env.START_MONEY) || 1000; // 테스트할 땐 START_MONEY=300 처럼 낮추면 파산·탄광 흐름을 빨리 볼 수 있다
 const ALMS = 100; // 한푼줍쇼 한 번에 건네는 돈
-const DAYS = Number(process.env.DAYS) || 7; // 짧게 한 판 하고 싶으면 DAYS=3 node server.js
+const DAYS = Number(process.env.DAYS) || 7; // 새 방의 기본 진행 일수. 방장이 대기실에서 바꾼다 (1~MAX_DAYS)
+const MAX_DAYS = 30;
 const WAGE = 200; // 아오지 탄광 일당
 // 도박 컨텐츠 목록. cap(day) = 그날 한 사람이 걸 수 있는 총액 상한(올인 즉사 방지, 날이 갈수록 판이 커진다).
 // 새 게임을 추가할 땐 여기에 등록하고 startDay에서 key별로 분기하면 된다. (투표 카드용으로 클라이언트 GINFO/drawArt에도)
+// min = 최소 인원(없으면 1). 방 인원이 모자라면 투표 카드/무작위 후보에서 빠진다.
 // 경마 = 하루 1경주, cap은 하루 총액. 블랙잭 = 하루 BJ_HANDS판, cap은 판당(더블다운은 상한과 별개로 판돈만큼 더 낸다).
 const GAMES = [
   { key: "derby", name: "경마", cap: (day) => 200 + 100 * day },
@@ -66,7 +68,6 @@ const PG_ROUNDS = 3;
 const PG_EDGE = 0.95;
 const PG_PROBS = [0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45];
 const PG_MULTS = PG_PROBS.map((_, k) => Math.round((PG_EDGE / PG_PROBS.slice(0, k + 1).reduce((a, b) => a * b, 1)) * 100) / 100);
-const VOTE_SECONDS = 15; // 게임 투표 제한 시간 (전원 준비하면 바로 추첨)
 const VOTE_REVEAL = 4500; // 추첨 후 룰렛 연출을 보여주고 낮을 시작하기까지(ms)
 const BJ_HANDS = 3;
 const DICE_ROUNDS = 3;
@@ -227,6 +228,7 @@ function createRoom(title, hostName) {
     players: new Map(), // ws -> player
     phase: "lobby", // lobby | vote | betting | countdown | racing | result | night | final
     day: 0,
+    days: DAYS, // 방장이 대기실에서 정하는 진행 일수
     game: null,
     cap: 0,
     vote: null, // 게임 투표: { options: [게임 key 3개], votes: { playerId: 0~3 (3 = 무작위) }, until, pick, game }
@@ -253,20 +255,23 @@ function broadcast(room, msg) {
 function broadcastRoom(room) {
   broadcast(room, {
     type: "room",
-    room: { code: room.code, title: room.title, phase: room.phase, day: room.day, days: DAYS, game: room.game, cap: room.cap,
+    room: { code: room.code, title: room.title, phase: room.phase, day: room.day, days: room.days, game: room.game, cap: room.cap,
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
       dice: room.dice,
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
-      vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), left: room.vote.until - Date.now(), pick: room.vote.pick, game: room.vote.game },
+      vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, game: room.vote.game },
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
         dealer: room.bj.hidden ? room.bj.dealer.map((c, i) => (i === 1 ? null : c)) : room.bj.dealer } },
   });
 }
 
+// 방장 = 제일 먼저 들어와 있는 사람 (방장이 나가면 다음 사람이 이어받는다)
+const hostOf = (room) => room.players.values().next().value;
+
 // 방 목록: 아직 방에 안 들어간(타이틀 화면의) 모든 접속자에게 보낸다
 function roomList() {
   return { type: "rooms", max: MAX_PLAYERS, rooms: [...rooms.values()].map((r) => ({
-    id: r.code, title: r.title, count: r.players.size, day: r.day, days: DAYS, host: (r.players.values().next().value || {}).name || "",
+    id: r.code, title: r.title, count: r.players.size, day: r.day, days: r.days, host: (hostOf(r) || {}).name || "",
   })) };
 }
 
@@ -283,15 +288,17 @@ function sys(room, text) {
 }
 
 // ---------- 게임 투표 (매일 낮 전) ----------
-// 카드 3장 + 무작위 중 하나에 투표. 칸별 확률 = 득표 / 전체 표 (아무도 안 찍으면 카드 3장 균등). 무작위가 뽑히면 전체 GAMES에서 하나.
+// 카드 3장 + 무작위 중 하나를 누르면 그게 곧 투표이자 준비. 전원이 누르는 순간 추첨한다(그 전엔 바꿔 눌러도 됨). 칸별 확률 = 득표 / 전체 표. 무작위가 뽑히면 전체 GAMES에서 하나.
+// ponytail: 제한 시간 없음 → 안 누르는 사람이 있으면 멈춘다(베팅/밤 준비와 같은 방식). 잠수가 문제 되면 타이머를 다시 붙인다.
+const playable = (room) => GAMES.filter((g) => room.players.size >= (g.min || 1));
+
 function startVote(room) {
   if (process.env.GAME) return startDay(room); // 컨텐츠 고정(테스트용)이면 투표할 게 없다
   room.phase = "vote";
-  room.vote = { options: shuffle(GAMES.map((g) => g.key)).slice(0, 3), votes: {}, until: Date.now() + VOTE_SECONDS * 1000, pick: null, game: null };
+  room.vote = { options: shuffle(playable(room).map((g) => g.key)).slice(0, 3), votes: {}, pick: null, game: null };
   for (const p of room.players.values()) p.ready = false;
   sys(room, "🗳️ DAY " + (room.day + 1) + " — 오늘 할 도박을 골라주세요!");
   broadcastRoom(room);
-  room.timer = setTimeout(() => resolveVote(room), VOTE_SECONDS * 1000);
 }
 
 function voteCounts(room) { // 나간 사람의 표는 안 센다
@@ -302,17 +309,17 @@ function voteCounts(room) { // 나간 사람의 표는 안 센다
 
 function checkVoteReady(room) {
   if (room.phase !== "vote" || room.vote.pick !== null) return;
-  for (const p of room.players.values()) if (!p.ready) return;
+  for (const p of room.players.values()) if (!(p.id in room.vote.votes)) return;
   resolveVote(room);
 }
 
 function resolveVote(room) {
-  clearTimeout(room.timer);
-  const V = room.vote, counts = voteCounts(room), weights = counts.some((c) => c) ? counts : [1, 1, 1, 0];
+  const V = room.vote, weights = voteCounts(room); // 전원이 찍은 뒤에만 불리니 표가 최소 1장은 있다
   let r = Math.random() * weights.reduce((a, b) => a + b, 0), pick = 0;
   for (; pick < 3 && r >= weights[pick]; pick++) r -= weights[pick];
   V.pick = pick;
-  V.game = pick < 3 ? V.options[pick] : GAMES[Math.floor(Math.random() * GAMES.length)].key;
+  const pool = playable(room);
+  V.game = pick < 3 ? V.options[pick] : pool[Math.floor(Math.random() * pool.length)].key;
   broadcastRoom(room); // 결과는 클라이언트가 룰렛을 다 돌린 뒤에 보여준다 (채팅으로 미리 알리지 않음)
   room.timer = setTimeout(() => startDay(room, V.game), VOTE_REVEAL);
 }
@@ -333,7 +340,7 @@ function startDay(room, key) {
   room.vote = null;
   for (const p of room.players.values()) Object.assign(p, { ready: false, begging: false, begged: false, bets: {}, bj: null, pg: null, dayStart: p.money });
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
-  sys(room, "☀️ DAY " + room.day + "/" + DAYS + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
+  sys(room, "☀️ DAY " + room.day + "/" + room.days + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
   broadcastRoom(room);
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
@@ -594,12 +601,12 @@ function checkNightReady(room) {
   for (const p of room.players.values()) if (!p.ready && !(p.money === 0 && p.begged)) return;
   for (const p of room.players.values()) {
     p.begging = false;
-    if (p.money === 0 && room.day < DAYS) { p.mining = true; sys(room, "⛏️ " + p.name + " → 아오지 탄광행 (내일은 관전만)"); }
+    if (p.money === 0 && room.day < room.days) { p.mining = true; sys(room, "⛏️ " + p.name + " → 아오지 탄광행 (내일은 관전만)"); }
   }
-  if (room.day < DAYS) return startVote(room);
+  if (room.day < room.days) return startVote(room);
   room.phase = "final";
   const top = [...room.players.values()].sort((a, b) => b.money - a.money)[0];
-  sys(room, "🏆 일주일 끝! 최고의 도박꾼은 " + top.name + " ($" + top.money + ")");
+  sys(room, "🏆 " + room.days + "일 끝! 최고의 도박꾼은 " + top.name + " ($" + top.money + ")");
   broadcastRoom(room);
 }
 
@@ -675,7 +682,11 @@ function handleMessage(ws, msg) {
   const canBet = room.phase === "betting" && !me.ready && !me.mining;
 
   if (msg.type === "start") {
-    if (room.phase === "lobby") startVote(room);
+    if (room.phase === "lobby" && me === hostOf(room)) startVote(room);
+  } else if (msg.type === "days") {
+    if (room.phase !== "lobby" || me !== hostOf(room) || !Number.isInteger(msg.n) || msg.n < 1 || msg.n > MAX_DAYS) return;
+    room.days = msg.n;
+    broadcastRoom(room);
   } else if (msg.type === "chat") {
     const text = String(msg.text || "").trim().slice(0, 120);
     if (!text || Date.now() - (ws.lastChat || 0) < 400) return; // 도배 방지
@@ -702,16 +713,16 @@ function handleMessage(ws, msg) {
     me.bets = {};
     broadcastRoom(room);
   } else if (msg.type === "ready") {
-    if ((room.phase !== "betting" || me.mining) && room.phase !== "night" && room.phase !== "vote") return;
+    if ((room.phase !== "betting" || me.mining) && room.phase !== "night") return;
     me.ready = !!msg.v;
     broadcastRoom(room);
     checkAllReady(room);
     checkNightReady(room);
-    checkVoteReady(room);
   } else if (msg.type === "vote") {
-    if (room.phase !== "vote" || room.vote.pick !== null || me.ready || ![0, 1, 2, 3].includes(msg.i)) return; // 준비하면 표가 잠긴다
+    if (room.phase !== "vote" || room.vote.pick !== null || ![0, 1, 2, 3].includes(msg.i)) return;
     room.vote.votes[me.id] = msg.i;
     broadcastRoom(room);
+    checkVoteReady(room); // 마지막 사람이 누르는 순간 추첨
   } else if (msg.type === "pg") {
     pgAction(room, me, msg.a);
   } else if (msg.type === "bj") {
@@ -914,7 +925,7 @@ if (process.argv.includes("--check")) {
   handleMessage(wb, { type: "give", to: A.id });
   assert(A.history[2] === ALMS && B.history[2] === 400 && !A.begging, "적선은 그래프 기록에도 반영");
 
-  // 게임 투표: 없는 칸·준비 후 변경은 무시, 전원이 같은 칸이면 100% 그게 뽑히고, 전원 준비하면 타이머 없이 바로 추첨
+  // 게임 투표: 없는 칸은 무시, 다 누르기 전엔 바꿀 수 있고 추첨도 안 돌고, 마지막 사람이 누르는 순간 추첨. 전원이 같은 칸이면 100% 그게 뽑힌다
   delete process.env.GAME;
   const v1 = fake(), v2 = fake();
   handleMessage(v1, { type: "create", name: "V1" });
@@ -923,22 +934,44 @@ if (process.argv.includes("--check")) {
   const vr = v1.room;
   assert(vr.phase === "vote" && vr.day === 0 && new Set(vr.vote.options).size === 3);
   handleMessage(v1, { type: "vote", i: 4 });
-  handleMessage(v1, { type: "vote", i: 2 });
-  handleMessage(v1, { type: "ready", v: true });
   handleMessage(v1, { type: "vote", i: 0 });
+  handleMessage(v1, { type: "vote", i: 2 }); // 바꿔 누르기
+  handleMessage(v1, { type: "ready", v: true }); // 준비 버튼은 이제 없다
+  assert(vr.vote.pick === null && !vr.timer, "한 명이라도 안 눌렀으면 안 돌아간다 (타이머도 없음)");
   handleMessage(v2, { type: "vote", i: 2 });
   assert.deepStrictEqual(voteCounts(vr), [0, 0, 2, 0]);
-  handleMessage(v2, { type: "ready", v: true });
+  handleMessage(v2, { type: "vote", i: 0 }); // 추첨이 시작되면 못 바꾼다
   const voted = vr.vote.options[2];
   assert(vr.vote.pick === 2 && vr.vote.game === voted);
   clearTimeout(vr.timer);
   startDay(vr, voted);
   assert(vr.phase === "betting" && vr.day === 1 && vr.game === voted && !vr.vote);
+
+  // 진행 일수: 대기실에서 방장만 정하고(시작도 방장만), 시작하면 못 바꾸고, 그 날수가 지나면 끝난다
+  const h1 = fake(), h2 = fake();
+  handleMessage(h1, { type: "create", name: "H1" });
+  handleMessage(h2, { type: "join", id: h1.room.code, name: "H2" });
+  const hr = h1.room, nextNight = () => { clearTimeout(hr.timer); startNight(hr); handleMessage(h1, { type: "ready", v: true }); handleMessage(h2, { type: "ready", v: true }); };
+  handleMessage(h2, { type: "days", n: 3 });  // 방장 아님
+  handleMessage(h1, { type: "days", n: 0 });  // 범위 밖
+  handleMessage(h1, { type: "days", n: 2.5 });
+  handleMessage(h2, { type: "start" });       // 방장 아님
+  assert(hr.days === DAYS && hr.phase === "lobby");
+  handleMessage(h1, { type: "days", n: 2 });
+  process.env.GAME = "dice";
+  handleMessage(h1, { type: "start" });
+  handleMessage(h1, { type: "days", n: 5 });  // 시작 후엔 무시
+  assert(hr.days === 2 && hr.day === 1);
+  nextNight();
+  assert(hr.day === 2 && hr.phase === "betting");
+  nextNight();
+  assert(hr.phase === "final", "2일 뒤엔 끝");
+  delete process.env.GAME;
   console.log("OK");
   process.exit(0);
 }
 
 const PORT = process.env.PORT || 3100;
 server.listen(PORT, () => {
-  console.log("우당탕 도박 일주일 서버 실행 중 - 포트 " + PORT);
+  console.log("뒷방 한탕 서버 실행 중 - 포트 " + PORT);
 });

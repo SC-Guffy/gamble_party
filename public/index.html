@@ -3030,7 +3030,7 @@
         if(!v.quiet){
           if(mine && m) sfxCoin(); else tone(mine ? 180 : 240, mine ? 0.25 : 0.12, "sine", mine ? 0.14 : 0.06, mine ? 70 : 120);
           burst(m ? 16 : 7, null, G.endY, (dx,dy) => ({x:b.x, color:R()<0.5 ? PCOL[p.color] : "#fff", vx:dx*130, vy:-Math.abs(dy)*180-30, g:420, life:0.6, w:3+R()*3, spin:6}));
-          if(m >= 10){ fireworks(); sfxSparkle(); setOverlay("🎆 "+p.name+" "+PK_ZONES[d.zone]+" 적중! x"+m, 1800); }
+          if(m && d.zone === 2){ fireworks(); sfxSparkle(); setOverlay("🎆 "+p.name+" "+PK_ZONES[d.zone]+" 적중! x"+m, 1800); } // 최외곽(가장 드문 구역) 적중
         }
         if(mine) renderPk();
       }

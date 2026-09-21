@@ -56,24 +56,27 @@ const WAGE = 100; // 아오지 탄광 기본 일당 (+ 그날 캔 돈, 합계 �
 // 새 게임을 추가할 땐 여기에 등록하고 startDay에서 key별로 분기하면 된다. (투표 카드용으로 클라이언트 GINFO/drawArt에도)
 // min = 최소 인원(없으면 1). 방 인원이 모자라면 투표 카드/무작위 후보에서 빠진다.
 // 경마 = 하루 1경주, cap은 하루 총액. 블랙잭 = 하루 BJ_HANDS판, cap은 판당(더블다운은 상한과 별개로 판돈만큼 더 낸다).
+// 한 판 최고 배수. 이보다 크면 한 방에 판이 끝난다(판당 상한이 있어서 나머지는 대박 말고는 못 따라잡고, 1등은 구경만 해도 이긴다).
+// 경마·주사위는 여기서 배당을 자르고(롱샷만 하우스에 불리해짐), 풍선·펭귄·플링코는 규칙 자체를 이 안에 들어오게 만들었다.
+const MAX_MULT = 15;
 const GAMES = [
-  { key: "derby", name: "경마", cap: (day) => 200 + 100 * day },
-  { key: "blackjack", name: "블랙잭", cap: (day) => 50 + 50 * day },
-  { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day }, // 하루 DICE_ROUNDS판, cap은 판당
-  { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day }, // 하루 PG_ROUNDS판, cap은 판당
-  { key: "nunchi", name: "눈치 숫자", cap: (day) => 50 + 50 * day, min: 3 }, // 하루 NC_ROUNDS판, cap = 판당 고정 참가비. 둘이면 1이 무조건 이득이라 3명부터
-  { key: "indian", name: "인디언 포커", cap: (day) => 50 + 50 * day, min: 2 }, // 하루 IP_ROUNDS판, cap = 판당 참가비(고정). 콜도 같은 금액
-  { key: "auction", name: "미스터리 상자 경매", cap: (day) => 100 + 100 * day, min: 2 }, // 하루 AU_ROUNDS판, cap은 판당 입찰 상한
-  { key: "watergun", name: "러시안 룰렛", cap: (day) => 50 + 50 * day, min: 2 }, // 하루 WG_ROUNDS판, cap = 판당 고정 참가비
-  { key: "balloon", name: "풍선 불기", cap: (day) => 50 + 50 * day }, // 하루 BL_ROUNDS판, cap은 판당
-  { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day }, // 하루 CN_ROUNDS판, cap은 판당 투자금
-  { key: "plinko", name: "플링코", cap: (day) => 50 + 50 * day }, // 하루 PK_ROUNDS판, cap은 판당
+  { key: "derby", name: "경마", cap: (day) => 200 + 100 * day }, // st = 그날 상태가 담기는 room 필드(판수 안내용), capName = 하루 시작 안내에서 cap을 부르는 말
+  { key: "blackjack", name: "블랙잭", cap: (day) => 50 + 50 * day, st: "bj" },
+  { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day, st: "dice" }, // 하루 DICE_ROUNDS판, cap은 판당
+  { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day, st: "pg" }, // 하루 PG_ROUNDS판, cap은 판당
+  { key: "nunchi", name: "눈치 숫자", cap: (day) => 50 + 50 * day, min: 3, st: "nc", capName: "참가비" }, // 하루 NC_ROUNDS판, cap = 판당 고정 참가비. 둘이면 1이 무조건 이득이라 3명부터
+  { key: "indian", name: "인디언 포커", cap: (day) => 50 + 50 * day, min: 2, st: "ip", capName: "참가비" }, // 하루 IP_ROUNDS판, cap = 판당 참가비(고정). 콜도 같은 금액
+  { key: "auction", name: "미스터리 상자 경매", cap: (day) => 100 + 100 * day, min: 2, st: "au", capName: "입찰 상한" }, // 하루 AU_ROUNDS판, cap은 판당 입찰 상한
+  { key: "watergun", name: "러시안 룰렛", cap: (day) => 50 + 50 * day, min: 2, st: "wg", capName: "참가비" }, // 하루 WG_ROUNDS판, cap = 판당 고정 참가비
+  { key: "balloon", name: "풍선 불기", cap: (day) => 50 + 50 * day, st: "bl" }, // 하루 BL_ROUNDS판, cap은 판당
+  { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day, st: "cn", capName: "투자 상한" }, // 하루 CN_ROUNDS판, cap은 판당 투자금
+  { key: "plinko", name: "플링코", cap: (day) => 50 + 50 * day, st: "pk" }, // 하루 PK_ROUNDS판, cap은 판당
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
 const PG_ROUNDS = 3;
 const PG_EDGE = 0.95;
-const PG_PROBS = [0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45];
+const PG_PROBS = [0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55]; // 8칸 → 완주 x13.78 (MAX_MULT 안)
 const PG_MULTS = PG_PROBS.map((_, k) => Math.round((PG_EDGE / PG_PROBS.slice(0, k + 1).reduce((a, b) => a * b, 1)) * 100) / 100);
 const VOTE_REVEAL = 4500; // 추첨 후 룰렛 연출을 보여주고 낮을 시작하기까지(ms)
 const BJ_HANDS = 3;
@@ -93,7 +96,7 @@ for (const bet of DICE_BETS) { // 36가지를 직접 세어서 배당을 만든�
   let ways = 0;
   for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) if (bet.win(a, b)) ways++;
   bet.ways = ways;
-  bet.odds = Math.round((DICE_EDGE * 36 / ways) * 10) / 10;
+  bet.odds = Math.min(MAX_MULT, Math.round((DICE_EDGE * 36 / ways) * 10) / 10); // 합 2·3·11·12는 x15로 잘린다
 }
 const LOOK_SIZES = { top: 8, bottom: 6, hair: 6, hairColor: 6, skin: 4 }; // 클라이언트 팔레트/머리모양 개수와 같아야 함
 const TRACK = 1000; // 트랙 길이 (클라이언트와 같아야 함)
@@ -191,7 +194,7 @@ function simulate(entrants, record) {
 function calcOdds(entrants, n = 3000) {
   const wins = entrants.map(() => 0);
   for (let i = 0; i < n; i++) wins[simulate(entrants, false).order[0]]++;
-  return wins.map((w) => Math.min(80, Math.max(1.1, Math.round((EDGE / Math.max(w / n, 0.005)) * 10) / 10)));
+  return wins.map((w) => Math.min(MAX_MULT, Math.max(1.1, Math.round((EDGE / Math.max(w / n, 0.005)) * 10) / 10)));
 }
 
 function pickEntrants() {
@@ -365,12 +368,15 @@ function startDay(room, key) {
   for (const p of room.players.values()) Object.assign(p, { ready: false, begging: false, begged: false, bets: {}, bj: null, pg: null, dayStart: p.money });
   for (const p of room.players.values()) p.cn = null;
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
-  sys(room, "☀️ DAY " + room.day + "/" + room.days + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
-  if (room.nc) sys(room, "🙊 1~10 중 남과 안 겹친 가장 작은 숫자가 판돈 독식! (판당 참가비 $" + room.cap + ")");
-  if (room.ip) sys(room, "🙈 인디언 포커: " + IP_ROUNDS + "판 · 참가비 $" + room.cap + " · 콜하면 $" + room.cap + " 더 · 10 들고 다이하면 벌금!");
-  if (room.wg) sys(room, "💥 하루 " + WG_ROUNDS + "판 · 판당 참가비 $" + room.cap + " 고정 · 6칸 중 1칸에 총알!");
-  if (room.bl) sys(room, "🎈 풍선 불기는 하루 " + BL_ROUNDS + "판 · 상한은 판당 · 터지기 전에 놓으면 그때 배수만큼!");
-  if (room.cn) sys(room, "🪙 하루 " + CN_ROUNDS + "판 · 판당 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 싸게 사서 비싸게 파세요 (거래마다 수수료 " + CN_FEE * 100 + "%)");
+  const st = room[game.st], rounds = st && (st.rounds || st.hands);
+  sys(room, "☀️ DAY " + room.day + "/" + room.days + " — 오늘의 도박은 " + game.name + "! (" + (rounds ? rounds + "판 · 판당 " : "1경주 · ") + (game.capName || "베팅 상한") + " $" + room.cap + ")");
+  if (room.nc) sys(room, "🙊 1~10 중 남과 안 겹친 가장 작은 숫자가 판돈 독식! 전원 겹치면 다음 판으로 이월");
+  if (room.ip) sys(room, "🙈 내 카드만 못 봐요 · 20초 안에 콜($" + room.cap + " 더)/다이 · 10 들고 다이하면 벌금!");
+  if (room.wg) sys(room, "💥 6칸 중 1칸에 총알 · 차례마다 당기기, 또는 참가비 절반 내고 넘기기(판당 1회)");
+  if (room.bl) sys(room, "🎈 터지기 전에 놓으면 그때 배수만큼! 못 놓고 터지면 판돈 전액 잃음 (최대 x" + BL_MAX + ")");
+  if (room.cn) sys(room, "🪙 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 현금으로 시작, 매수 = 전액 코인 / 매도 = 전액 현금 (거래마다 수수료 " + CN_FEE * 100 + "%, 마감 때 자동 매도)");
+  if (room.au) sys(room, "🎁 몰래 입찰 → 최고가 1명만 입찰가를 내고 상자를 가져가요 · 각자 비밀 힌트가 하나씩");
+  if (room.pk) sys(room, "🔴 공이 떨어질 구역을 맞히면 배당만큼 · " + PK_ODDS.map((o, z) => ["중앙", "외곽", "최외곽"][z] + " x" + o).join(" · "));
   broadcastRoom(room);
   if (room.au) room.players.forEach((_, ws) => auSendMe(room, ws)); // 비밀 힌트는 각자에게만
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
@@ -939,7 +945,7 @@ function wgCheck(room) {
 const BL_ROUNDS = 3;
 const BL_EDGE = 0.95;
 const BL_RATE = 0.12; // 약 5.8초에 x2, 19초에 x10
-const BL_MAX = 50; // 상한(약 33초). 여기까지 버틴 사람은 자동 회수
+const BL_MAX = MAX_MULT; // 상한(약 23초). 여기까지 버틴 사람은 자동 회수 — 상한에서 회수라 환급률 95%는 그대로
 const BL_COUNT = 3000; // 부풀기 전 카운트다운(ms)
 const BL_FF = 2500; // 전원이 놓은 뒤, 터지는 곳까지 빨리 감아 보여주는 시간(ms)
 const blCrash = () => Math.min(BL_MAX, Math.max(1, BL_EDGE / (1 - Math.random())));
@@ -1122,7 +1128,7 @@ const PK_EDGE = 0.95;
 const PK_FALL = 3000; // 공 하나가 떨어지는 시간(ms). 클라이언트 PK_FALL과 같아야 함
 const PK_GAP = 400; // 참가자마다 출발 간격(ms). 클라이언트 PK_GAP과 같아야 함
 const pkC = (n, k) => (k ? (pkC(n, k - 1) * (n - k + 1)) / k : 1); // 이항계수 C(n,k)
-const PK_ZONE_OF = Array.from({ length: PK_ROWS + 1 }, (_, k) => { const d = Math.abs(k - PK_ROWS / 2); return d <= 1 ? 0 : d <= 3 ? 1 : 2; }); // 칸 → 구역
+const PK_ZONE_OF = Array.from({ length: PK_ROWS + 1 }, (_, k) => { const d = Math.abs(k - PK_ROWS / 2); return d <= 1 ? 0 : d <= 2 ? 1 : 2; }); // 칸 → 구역: 중앙 4~6 · 외곽 3·7 · 최외곽 0~2·8~10
 const PK_WAYS = [0, 1, 2].map((z) => PK_ZONE_OF.reduce((n, zz, k) => n + (zz === z ? pkC(PK_ROWS, k) : 0), 0)); // 경우의 수를 직접 센다 (손으로 적은 표가 틀릴 일이 없게)
 const PK_ODDS = PK_WAYS.map((w) => Math.round((PK_EDGE * 2 ** PK_ROWS / w) * 100) / 100);
 
@@ -1280,11 +1286,13 @@ function lnAct(room, me, a) {
 // 연타가 많으니 타격 결과는 친 사람에게만 보내고, 방 전체 broadcastRoom은 바위가 깨질 때만(HUD의 ⛏️$ 갱신용).
 const MN_MAX = 1000;
 const MN_RATE = 8; // 초당 타격 상한. 넘는 건 매크로로 보고 버린다
-const MN_LOOT = [ // [종류, 확률, 최소$, 최대$] — 깊이 n이면 값 × (1 + 0.1n)
-  ["stone", 0.7, 3, 8],
-  ["silver", 0.22, 10, 20],
-  ["gold", 0.07, 35, 60],
-  ["dia", 0.01, 400, 600],
+// 초당 6번 기준 일당 중앙값: 1분 $211 · 2분 $308 · 3분 $395, 3분에 한도($1000) 닿는 건 ~10%(거의 다이아). 파산 → 탄광이 "$1000 리셋"이 되지 않게.
+const MN_DEPTH = 0.03; // 깊이 1칸마다 전리품 값 +3%
+const MN_LOOT = [ // [종류, 확률, 최소$, 최대$] — 깊이 n이면 값 × (1 + MN_DEPTH × n)
+  ["stone", 0.7, 1, 4],
+  ["silver", 0.22, 5, 10],
+  ["gold", 0.077, 18, 30],
+  ["dia", 0.003, 500, 700],
 ];
 const mnRock = (n) => ({ n, hp: 12 + n, max: 12 + n });
 
@@ -1292,7 +1300,7 @@ function mnLoot(n) {
   let r = Math.random(), i = 0;
   while (i < MN_LOOT.length - 1 && r >= MN_LOOT[i][1]) r -= MN_LOOT[i++][1];
   const [k, , lo, hi] = MN_LOOT[i];
-  return { k, v: Math.round((lo + Math.random() * (hi - lo)) * (1 + 0.1 * n)) };
+  return { k, v: Math.round((lo + Math.random() * (hi - lo)) * (1 + MN_DEPTH * n)) };
 }
 
 function mnHit(ws, room, me) {
@@ -1713,7 +1721,7 @@ if (process.argv.includes("--check")) {
   const entrants = pickEntrants();
   const implied = entrants.reduce((s, e) => s + EDGE / e.odds, 0);
   console.log("샘플 배당", entrants.map((e) => e.key + " x" + e.odds).join(", "), "| 내재확률 합", implied.toFixed(2));
-  assert(entrants.length === FIELD && Math.abs(implied - 1) < 0.1);
+  assert(entrants.length === FIELD && implied > 0.9 && implied < 1.2 && entrants.every((e) => e.odds <= MAX_MULT)); // 롱샷을 x15로 자르면 내재확률 합이 1보다 커진다
 
   const r = simulate(entrants, true);
   assert(r.pos[r.order[0]].some((p) => p >= TRACK) && r.pos.every((p) => p.length === r.fx[0].length));
@@ -2056,7 +2064,7 @@ if (process.argv.includes("--check")) {
   clearTimeout(lr.timer);
   blPop(lr);
   clearTimeout(lr.timer);
-  assert(lr.bl.cash[L2.id] === BL_MAX && blWin(10, BL_MAX) === 500);
+  assert(lr.bl.cash[L2.id] === BL_MAX && blWin(10, BL_MAX) === 10 * BL_MAX);
   delete process.env.GAME;
   rooms.delete(lr.code);
 
@@ -2115,9 +2123,9 @@ if (process.argv.includes("--check")) {
   delete process.env.GAME;
 
   // 플링코: 칸→구역, 구역별 경우의 수(C(10,k)의 합)·배당·기대 환급률 + 짜고 떨어뜨린 한 판
-  // (최외곽에 걸고 전부 오른쪽 → 10번 칸 적중 x44.22 / 중앙(기본)에 걸고 5번 칸 적중 x1.45 / 외곽에 걸었는데 5번 칸 → 꽝)
-  assert.deepStrictEqual(PK_ZONE_OF, [2, 2, 1, 1, 0, 0, 0, 1, 1, 2, 2]);
-  assert.deepStrictEqual(PK_WAYS, [672, 330, 22]);
+  // (최외곽에 걸고 전부 오른쪽 → 10번 칸 적중 x8.69 / 중앙(기본)에 걸고 5번 칸 적중 x1.45 / 외곽에 걸었는데 5번 칸 → 꽝)
+  assert.deepStrictEqual(PK_ZONE_OF, [2, 2, 2, 1, 0, 0, 0, 1, 2, 2, 2]);
+  assert.deepStrictEqual(PK_WAYS, [672, 240, 112]);
   assert(PK_WAYS.reduce((a, b) => a + b) === 2 ** PK_ROWS, "구역이 모든 칸을 빠짐없이 덮어야 함");
   PK_ODDS.forEach((o, z) => assert(Math.abs((o * PK_WAYS[z]) / 2 ** PK_ROWS - PK_EDGE) <= 0.01, "플링코 " + z + "번 구역 환급률이 어긋남"));
   console.log("플링코 배당", PK_ODDS.map((o, z) => ["중앙", "외곽", "최외곽"][z] + " " + ((PK_WAYS[z] / 2 ** PK_ROWS) * 100).toFixed(1) + "%→x" + o).join(" "));
@@ -2152,14 +2160,14 @@ if (process.argv.includes("--check")) {
   pkSettle(pkr);
   clearTimeout(pkr.timer);
   assert(pkr.phase === "result" && pkr.result.bins[PK1.id] === 10 && pkr.result.zones[PK3.id] === 1 && pkr.result.mults[PK3.id] === 0);
-  assert(PK1.money === 900 + 4422 && PK2.money === 950 + 72 && PK3.money === 950 && pkr.result.payouts[PK1.id].win === 4422 && !PK1.bets[0], "최외곽 적중 $100×44.22, 중앙 적중 $50×1.45(내림), 빗나가면 0");
+  assert(PK1.money === 900 + 869 && PK2.money === 950 + 72 && PK3.money === 950 && pkr.result.payouts[PK1.id].win === 869 && !PK1.bets[0], "최외곽 적중 $100×8.69, 중앙 적중 $50×1.45(내림), 빗나가면 0");
   delete process.env.GAME;
   rooms.delete(pkr.code);
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);
   assert.deepStrictEqual(DICE_BETS.slice(5).map((b) => b.ways), [1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]);
-  for (const b of DICE_BETS) assert(Math.abs(b.odds * b.ways / 36 - DICE_EDGE) < 0.02, b.key + " 환급률이 어긋남");
+  for (const b of DICE_BETS) assert(b.odds === MAX_MULT ? b.odds * b.ways / 36 < DICE_EDGE : Math.abs(b.odds * b.ways / 36 - DICE_EDGE) < 0.02, b.key + " 환급률이 어긋남");
   console.log("주사위 배당", DICE_BETS.map((b) => b.key + " x" + b.odds).join(", "));
   process.env.GAME = "dice";
   const fd = () => ({ id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} });
@@ -2452,14 +2460,14 @@ if (process.argv.includes("--check")) {
   m1.mnHits = []; // 1초 지난 셈
   Math.random = () => 0; // 전리품 = 돌, 최솟값
   hit(4);
-  assert(M1.mnEarn === 3 && M1.mnRock.n === 1 && M1.mnRock.hp === 13, "12번째 타격에 첫 바위가 깨지고 돌 $3");
-  assert.deepStrictEqual(m1.got.filter((m) => m.type === "mnHit").pop().loot, { k: "stone", v: 3 });
-  assert(m2.got.slice(seen).some((m) => m.type === "room" && m.room.players.find((p) => p.id === M1.id).mnEarn === 3), "바위가 깨지면 모두에게 방송");
+  assert(M1.mnEarn === 1 && M1.mnRock.n === 1 && M1.mnRock.hp === 13, "12번째 타격에 첫 바위가 깨지고 돌 $1");
+  assert.deepStrictEqual(m1.got.filter((m) => m.type === "mnHit").pop().loot, { k: "stone", v: 1 });
+  assert(m2.got.slice(seen).some((m) => m.type === "room" && m.room.players.find((p) => p.id === M1.id).mnEarn === 1), "바위가 깨지면 모두에게 방송");
   M1.mnRock = mnRock(10); M1.mnRock.hp = 1; m1.mnHits = [];
-  Math.random = () => 0.999; // 다이아 최댓값: (400 + 0.999 × 200) × 2 = $1200 → 한도($900 - $3)까지만
+  Math.random = () => 0.999; // 다이아 최댓값: (500 + 0.999 × 200) × 1.3 = $910 → 한도($900 - $1)까지만
   hit();
   assert(M1.mnEarn === MN_MAX - WAGE && M1.mnDia === 1);
-  assert(m2.got.some((m) => m.type === "toast" && m.text === "💎 M1 다이아 발견! +$897") && m2.got.some((m) => m.sys && m.text.startsWith("💎 M1")));
+  assert(m2.got.some((m) => m.type === "toast" && m.text === "💎 M1 다이아 발견! +$899") && m2.got.some((m) => m.sys && m.text.startsWith("💎 M1")));
   m1.mnHits = []; hit();
   assert(M1.mnRock.hp === M1.mnRock.max, "한도를 채우면 더 못 캔다");
   Math.random = realRandom;

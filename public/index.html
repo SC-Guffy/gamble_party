@@ -256,6 +256,15 @@
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
   .mk{font-size:11px;flex:none}
   #night-note{font-size:13px;color:var(--ink-dim);text-align:center;line-height:1.5}
+  /* 사채: 밤 정산 패널 + 정산표/HUD 빚 표시 */
+  #ln-panel{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 8px;background:#1d1219;border:2px solid #4d2533;border-radius:12px;padding:8px 10px}
+  #ln-panel > b{font-size:14px;color:#ffb3bf}
+  #ln-info{flex:1 1 170px;font-size:12px;line-height:1.4;color:var(--ink-dim);text-align:left}
+  #ln-panel button{font:inherit;font-weight:800;font-size:12.5px;border:1px solid #6a3044;border-radius:10px;padding:8px 10px;background:#2c1a24;color:var(--ink);cursor:pointer}
+  #ln-panel button:disabled{opacity:.35;cursor:not-allowed}
+  .ln-sub{display:block;font-size:11px;font-weight:600;color:#ffb3bf}
+  .ln-sub i{font-style:normal;white-space:nowrap} /* "이자 −$40"이 중간에서 안 끊기게 */
+  .pchip .ln-chip{color:#ffb3bf}
 
   #btn-mute{position:fixed;top:calc(8px + env(safe-area-inset-top,0px));right:8px;z-index:11;width:38px;height:38px;border-radius:50%;border:2px solid var(--panel-edge);background:rgba(20,19,31,.85);font-size:17px;cursor:pointer;padding:0}
   #hud{padding-right:54px}
@@ -455,6 +464,7 @@
         <canvas class="chart" id="night-chart" aria-label="일별 자산 변동 그래프"></canvas>
         <div class="rows" id="night-rows"></div>
         <div id="night-note"></div>
+        <div id="ln-panel"><b>💀 사채</b><span id="ln-info"></span><button data-ln="borrow">+$100 빌리기</button><button data-ln="repay">$100 갚기</button><button data-ln="repayAll">전액 갚기</button></div>
         <div class="btn-row"><button class="btn" id="btn-night">다음 날로 ▶</button></div>
       </div>
       <div id="panel-final" hidden>
@@ -1019,6 +1029,7 @@
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
+    lnRender(); // 사채: HUD·정산표 빚 표시 + 패널
   }
 
   // ---------- 채팅 ----------
@@ -1372,7 +1383,8 @@
     if(prog == null) prog = days;
     const vals = room.players.flatMap((p) => p.history.filter((v) => v != null));
     const step = Math.pow(10, Math.floor(Math.log10(Math.max(...vals, 1000)))) / 2, top = Math.ceil(Math.max(...vals, 1000)*1.05/step)*step;
-    const X = (d) => mL+(w-mL-mR)*d/days, Y = (v) => mT+(h-mT-mB)*(1-v/top);
+    const lnLow = Math.min(0, ...vals); // 사채: 순자산(현금 − 빚)은 음수일 수 있다 → 0 아래도 그린다
+    const X = (d) => mL+(w-mL-mR)*d/days, Y = (v) => mT+(h-mT-mB)*(top-v)/(top-lnLow);
     g.font = "500 10.5px Rubik, sans-serif"; g.textBaseline = "middle";
     for(let i=0;i<=4;i++){ // 눈금선은 흐리게
       const v = top*i/4;
@@ -1427,7 +1439,7 @@
   });
   window.addEventListener("resize", () => { document.querySelectorAll(".chart").forEach((cv) => drawChart(cv, null)); });
 
-  const ranked = () => room.players.slice().sort((a,b) => b.money-a.money);
+  const ranked = () => room.players.slice().sort((a,b) => lnNet(b)-lnNet(a));
   const moneyRow = (p, i, mid) => '<div class="row'+(p.id===myId?" mine":"")+'"><span class="rank">'+(["🥇","🥈","🥉"][i] || (i+1)+"위")+'</span><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>"+mid+'<span class="odds">$'+p.money+"</span></div>";
   function renderNight(){
     const my = me(), last = room.day >= room.days;
@@ -1454,6 +1466,72 @@
     $("final-title").textContent = "🏆 최고의 도박꾼: " + r[0].name;
     $("final-rows").innerHTML = r.map((p,i) => { const d = p.money-1000; return moneyRow(p, i, '<span class="'+(d>0?"plus":d<0?"minus":"")+'">'+(d>=0?"+":"−")+"$"+Math.abs(d)+"</span>"); }).join("");
     if(!chartAnim) drawChart($("final-chart"), null);
+  }
+
+  // ---------- 사채 ----------
+  // 밤 정산 때 $100씩 빌리고 갚는다(서버 lnAct가 한도·잔액을 다 잰다). 순위·그래프는 순자산(현금 − 빚), 빚은 매일 밤 20% 복리.
+  const LN_LIMIT = 1000;
+  function lnNet(p){ return p.money-(p.lnDebt || 0); }
+  // onRoom 끝에서 호출: HUD 칩(💀$빚) · 정산표/최종표 줄(빚·현금·오늘 이자, 금액 칸은 순자산) · 사채 패널
+  function lnRender(){
+    $("hud-players").querySelectorAll(".pchip").forEach((el, i) => { const d = room.players[i] && room.players[i].lnDebt; if(d) el.insertAdjacentHTML("beforeend", '<span class="ln-chip">💀$'+d+"</span>"); });
+    const night = room.phase === "night", fin = room.phase === "final";
+    if(!night && !fin) return;
+    const rows = $(fin ? "final-rows" : "night-rows").children;
+    ranked().forEach((p, i) => {
+      const d = p.lnDebt || 0, it = night && room.night[p.id] && room.night[p.id].lnInt, net = lnNet(p);
+      if(!rows[i] || (!d && !it)) return;
+      rows[i].querySelector(".grow").insertAdjacentHTML("beforeend", '<small class="ln-sub">'+(d ? "<i>💀 빚 $"+d+"</i> · <i>현금 $"+p.money+"</i>" : "<i>💀 완납!</i>")+(it ? " · <i>이자 −$"+it+"</i>" : "")+"</small>");
+      const odds = rows[i].querySelector(".odds"), dd = net-1000; // renderFinal과 같은 기준(시작 $1000)
+      odds.textContent = (net < 0 ? "−$" : "$")+Math.abs(net);
+      if(fin){ odds.previousElementSibling.className = dd>0 ? "plus" : dd<0 ? "minus" : ""; odds.previousElementSibling.textContent = (dd>=0 ? "+" : "−")+"$"+Math.abs(dd); }
+    });
+    if(!night) return;
+    const my = me(), d = my.lnDebt || 0, last = room.day >= room.days, btn = (a) => $("ln-panel").querySelector('[data-ln="'+a+'"]');
+    $("ln-info").textContent = (d ? "빚 $"+d+" · " : "") + (last ? "마지막 밤 · 순위는 현금 − 빚이라 갚아도 순자산은 같아요" :
+      (my.money === 0 && !my.begged ? "구걸 대신 빌리면 탄광 면제! · " : "") + "이자 하루 20% 복리 (오늘 빌린 돈은 내일 밤부터) · 한도 $"+LN_LIMIT);
+    btn("borrow").disabled = d+100 > LN_LIMIT;
+    btn("repay").disabled = btn("repayAll").disabled = !d || my.money <= 0;
+    btn("repayAll").textContent = d && my.money < d ? "가진 돈 다 갚기" : "전액 갚기";
+  }
+  $("ln-panel").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if(!b || b.disabled) return;
+    ensureAudio();
+    if(b.dataset.ln === "borrow"){ for(let k=0;k<6;k++) tone(1100+(k%2)*180, 0.035, "square", 0.05, null, k*0.07); tone(1319, 0.2, "triangle", 0.08, null, 0.45); } // 지폐 세는 차르르 + 딩
+    else { tone(196, 0.5, "sawtooth", 0.08, 98); tone(147, 0.7, "triangle", 0.1, 73, 0.12); } // 어두운 소리
+    sendMsg({type:"lnAct", a:b.dataset.ln});
+  });
+
+  // 사채업자: 검은 정장(TOPS/BOTTOMS 끝에 색을 붙여 drawPerson 재사용. 플레이어 룩 인덱스는 서버가 0~7만 주니 안 겹친다) + 흰 셔츠·넥타이 + 복셀 선글라스
+  const LN_LOOK = {top:TOPS.push("#24232c")-1, bottom:BOTTOMS.push("#1b1a22")-1, hair:0, hairColor:0, skin:1};
+  const LN_TALK = [[300,"이자는 내일 붙습니다^^"], [600,"슬슬 갚으셔야죠 형님^^"], [1000,"어이, 돈 언제 갚아?"], [Infinity,"원양어선 알아봤다 💢"]]; // 빚이 클수록 험악하게
+  // drawNight 플레이어 루프에서 호출. (cx, y) = 플레이어 발. 밤엔 옆에 서서 말풍선, 최종 시상대에선 밧줄로 홱홱 끌고 간다
+  function lnShark(g, p, cx, y, u, gap, now, i, fin){
+    const d = p.lnDebt || 0;
+    if(!d) return;
+    const n = room.players.length, su = u*0.9, side = fin ? (cx < W/2 ? -1 : 1) : (i < n/2 ? -1 : 1); // 밤엔 가운데 모닥불을 피해 바깥쪽에 선다
+    const tug = fin ? Math.max(0, S(now*4+i)) : 0, gy = fin ? H-10 : y, lean = side*0.16*tug;
+    const sx = clamp(cx+side*(fin ? 4.5*u+6*su+tug*2*u : gap*0.5), 5*su, W-5*su);
+    if(fin){ // 허리에 감은 밧줄 → 들어 올린 손(오른쪽 사채업자는 좌우를 뒤집어 그리니 왼손)
+      g.save(); g.translate(cx, y); g.scale(u, u); g.translate(-3, 0); drawBox(g,-0.15,5.9,0.35,6.3,0.9,3.3,"#c8a064"); g.restore();
+      const hx = -side*4.3*su, hy = -18*su, ax = sx+hx*Math.cos(lean)-hy*Math.sin(lean), ay = gy+hx*Math.sin(lean)+hy*Math.cos(lean), bx = cx+(side < 0 ? -2.9 : 3.4)*u, by = y-6.4*u;
+      g.strokeStyle = "#c8a064"; g.lineWidth = Math.max(1.5, u*0.45); g.beginPath(); g.moveTo(ax, ay);
+      g.quadraticCurveTo((ax+bx)/2, Math.max(ay, by)+(1-tug)*4*u, bx, by); g.stroke(); // 당길 땐 팽팽, 늦추면 처진다
+    }
+    g.save(); g.translate(sx, gy); g.rotate(lean); if(side > 0) g.scale(-1, 1); g.translate(-sx, -gy);
+    drawPerson(g, LN_LOOK, sx, gy, su, fin || d < 600 ? "wave" : "idle", now, 3+i);
+    const by = S((now+3+i)*2.2)*0.12; // drawPerson의 숨쉬기와 맞춘다
+    g.translate(sx, gy); g.scale(su, su); g.translate(-3, 0);
+    drawBox(g,2.1,8.2+by,0.5,1.8,2.8,0,"#f2f2ee"); drawBox(g,2.65,6.6+by,0.5,0.7,4.2,0,"#b0182c"); // 흰 셔츠 + 넥타이
+    drawBox(g,0.9,12.8+by,-0.4,2,1.4,0.4,"#0b0b10"); drawBox(g,3.1,12.8+by,-0.4,2,1.4,0.4,"#0b0b10"); drawBox(g,2.8,13.5+by,-0.4,0.4,0.4,0.4,"#0b0b10"); // 선글라스
+    drawBox(g,1.2,13.7+by,-0.45,0.6,0.3,0,"#9aa3c0"); // 알에 비친 빛
+    g.restore();
+    if((now*0.35+i*0.5)%1 > 0.55) return; // 번갈아 말한다 (좁은 화면에서 말풍선끼리 안 겹치게)
+    const fs = clamp(u*2.3, 10, 14), txt = fin ? "빚 $"+d+" 받으러 왔습니다^^" : LN_TALK.find((t) => d < t[0])[1], ty = gy-20*su-(i%2)*fs*1.9;
+    g.font = "800 "+fs+"px Rubik, sans-serif"; const hw = g.measureText(txt).width/2+fs*0.55+4; // pill 반폭 + 여백: 화면 가장자리에서 안 잘리게 (꼬리는 사채업자 위 그대로)
+    pill(g, clamp(sx, hw, W-hw), ty, txt, "#fff", fin || d >= 600 ? "#b0182c" : "#161320", fs);
+    g.fillStyle = "#fff"; g.beginPath(); g.moveTo(sx-4, ty+fs*0.78); g.lineTo(sx+4, ty+fs*0.78); g.lineTo(sx, ty+fs*0.78+6); g.fill();
   }
 
   // 경주 중 실시간 순위 (loop에서 0.25초마다 갱신)
@@ -3141,6 +3219,7 @@
       const lines = [["$"+(p.money-nt.delta+shown), "#ffdd7a"], [p.name, PCOL[p.color]]];
       if(!fin && shown) lines.unshift([(shown>0?"+":"−")+"$"+Math.abs(shown), shown>0 ? "#7bd88f" : "#ff5d72"]);
       personLabel(g, p, cx, y-(pose === "beg" ? 17 : 21)*u-(rank === 0 ? 2.5*u : 0), clamp(u*3.2, 11, 16), lines.reverse());
+      lnShark(g, p, cx, y, u, gap, now, i, fin); // 빚이 있으면 사채업자가 옆에 붙는다
     });
     stepParticles(dt, null);
   }

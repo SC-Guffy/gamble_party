@@ -1206,6 +1206,7 @@ function startNight(room) {
     p.ready = false;
     p.history[room.day] = p.money;
     room.night[p.id] = { delta: p.money - p.dayStart, wage };
+    lnNightly(room, p); // 사채 이자 + 그래프는 순자산으로
     if (wage) sys(room, "⛏️ " + p.name + " 탄광 일당 +$" + wage);
     if (p.money === 0) sys(room, "💸 " + p.name + " 파산! 한푼줍쇼는 딱 한 번…");
   }
@@ -1223,9 +1224,48 @@ function checkNightReady(room) {
   }
   if (room.day < room.days) return startVote(room);
   room.phase = "final";
-  const top = [...room.players.values()].sort((a, b) => b.money - a.money)[0];
-  sys(room, "🏆 " + room.days + "일 끝! 최고의 도박꾼은 " + top.name + " ($" + top.money + ")");
+  const top = [...room.players.values()].sort((a, b) => lnNet(b) - lnNet(a))[0];
+  sys(room, "🏆 " + room.days + "일 끝! 최고의 도박꾼은 " + top.name + " ($" + lnNet(top) + ")");
   broadcastRoom(room);
+}
+
+// ---------- 사채 ----------
+// 밤에만 $100씩 빌리고 갚는다. 빚(p.lnDebt, 원금+이자)이 $1000을 넘게는 못 빌린다. 빌린 돈은 바로 money에.
+// 이자는 매일 밤 정산(startNight) 때 기존 빚에 20% 복리. 빌리는 건 정산이 끝난 밤이라 그날 밤엔 안 붙고 다음 밤부터 붙는다.
+// 파산 판정은 그대로 money === 0 → 파산자가 빌리면 checkNightReady가 알아서 탄광에 안 보낸다. 순위·그래프는 순자산(money − 빚).
+const LN_UNIT = 100;
+const LN_LIMIT = 1000;
+const LN_RATE = 20; // 하루 이자(%). 정수로 계산해야 120 × 0.2 같은 부동소수 오차에 ceil이 1 더 붙지 않는다
+const lnNet = (p) => p.money - (p.lnDebt || 0);
+
+function lnNightly(room, p) {
+  if (p.lnDebt) {
+    const i = Math.ceil((p.lnDebt * LN_RATE) / 100);
+    p.lnDebt += i;
+    room.night[p.id].lnInt = i;
+    sys(room, "💀 " + p.name + " 사채 이자 −$" + i + " (빚 $" + p.lnDebt + ")");
+  }
+  p.history[room.day] = lnNet(p);
+}
+
+function lnAct(room, me, a) {
+  if (room.phase !== "night") return;
+  const debt = me.lnDebt || 0;
+  if (a === "borrow") {
+    if (debt + LN_UNIT > LN_LIMIT) return;
+    me.lnDebt = debt + LN_UNIT;
+    me.money += LN_UNIT;
+    me.begging = false; // 사채를 쓴 사람한테는 적선 못 한다
+    sys(room, "💀 " + me.name + " 사채 $" + LN_UNIT + " 빌림 (빚 $" + me.lnDebt + ")");
+  } else if (a === "repay" || a === "repayAll") {
+    const amt = Math.min(a === "repay" ? LN_UNIT : debt, debt, me.money); // 가진 돈 한도
+    if (!(amt > 0)) return;
+    me.lnDebt = debt - amt;
+    me.money -= amt;
+    sys(room, "💀 " + me.name + " 사채 $" + amt + " 갚음 (" + (me.lnDebt ? "남은 빚 $" + me.lnDebt : "완납!") + ")");
+  } else return;
+  broadcastRoom(room); // 순자산은 그대로라 그래프(history)는 안 바뀐다
+  checkNightReady(room); // 파산자가 다 갚고 다시 $0이 된 경우(구걸해 봤으면 자동 준비)
 }
 
 function pickLook(room) {
@@ -1337,6 +1377,7 @@ function handleMessage(ws, msg) {
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     room.bl = null;
     room.rcLeft.clear(); rcHostFix(room); // 재접속: 지난 판 스냅샷은 버리고, 끊긴 사람(📴)은 방장 자리에서 뒤로
+    for (const p of room.players.values()) p.lnDebt = 0; // 새 게임이면 사채도 탕감
     broadcastRoom(room);
     broadcastRoomList();
   } else if (msg.type === "bet") {
@@ -1395,9 +1436,12 @@ function handleMessage(ws, msg) {
     to.begging = false; // 누가 한 번 주면 그걸로 끝
     me.history[room.day] = me.money; // 적선은 밤에만 일어난다 → 오늘 밤 그래프에 반영
     to.history[room.day] = to.money;
+    me.history[room.day] = lnNet(me); to.history[room.day] = lnNet(to); // 사채: 그래프는 순자산
     sys(room, "🪙 " + me.name + " → " + to.name + " $" + ALMS + " 적선");
     broadcast(room, { type: "toast", text: "🪙 " + me.name + " → " + to.name + " $" + ALMS + " 적선!", coin: true });
     broadcastRoom(room);
+  } else if (msg.type === "lnAct") {
+    lnAct(room, me, msg.a);
   } else if (msg.type === "leave") {
     rcLeave(ws, room, me);
     leaveRoom(ws);
@@ -2185,6 +2229,49 @@ if (process.argv.includes("--check")) {
   lb.say({ type: "leave" });
   clearTimeout(rcLr.rcEmpty); rcDrop(rcLr);
   assert(!rooms.has(rcLr.code), "남은 사람이 전부 📴면 그 방도 치운다");
+
+  { // 블록으로 묶어서 다른 셀프 체크의 변수 이름과 안 부딪히게
+  // 사채: 밤에만 · 한도 $1000 · 빌린 밤은 무이자 → 다음 밤 20% → 그다음 밤 복리 · 갚기(부분/전액/돈 부족) · 파산자가 빌리면 탄광 안 감 · 최종 순위는 순자산
+  const lf = () => ({ id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, log: [], send(d) { this.log.push(d); } });
+  const l1 = lf(), l2 = lf();
+  handleMessage(l1, { type: "create", name: "L1" });
+  handleMessage(l2, { type: "join", id: l1.room.code, name: "L2" });
+  const lr = l1.room, L1 = lr.players.get(l1), L2 = lr.players.get(l2), lnReady = () => { handleMessage(l1, { type: "ready", v: true }); handleMessage(l2, { type: "ready", v: true }); };
+  handleMessage(l1, { type: "days", n: 3 });
+  process.env.GAME = "dice";
+  handleMessage(l1, { type: "start" });
+  handleMessage(l1, { type: "lnAct", a: "borrow" });
+  assert(!L1.lnDebt && L1.money === START_MONEY, "밤이 아니면 무시");
+  L1.money = 0; L2.money = 900; // 1일차: L1 파산
+  clearTimeout(lr.timer); startNight(lr);
+  for (let k = 0; k < 3; k++) handleMessage(l1, { type: "lnAct", a: "borrow" });
+  handleMessage(l1, { type: "lnAct", a: "steal" });
+  assert(L1.lnDebt === 300 && L1.money === 300 && !lr.night[L1.id].lnInt && L1.history[1] === 0, "빌린 밤엔 이자 없음, 순자산 그대로");
+  lnReady();
+  assert(lr.day === 2 && !L1.mining, "파산자가 사채를 쓰면 탄광에 안 간다");
+  clearTimeout(lr.timer); startNight(lr);
+  assert(L1.lnDebt === 360 && lr.night[L1.id].lnInt === 60 && L1.history[2] === 300 - 360, "다음 밤 20%");
+  for (let k = 0; k < 9; k++) handleMessage(l1, { type: "lnAct", a: "borrow" });
+  assert(L1.lnDebt === 960 && L1.money === 900, "빚 $1000을 넘게는 못 빌림");
+  lnReady();
+  clearTimeout(lr.timer); startNight(lr); // 3일차(마지막) 밤
+  assert(L1.lnDebt === 960 + 192 && lr.night[L1.id].lnInt === 192, "복리");
+  handleMessage(l1, { type: "lnAct", a: "repay" });
+  assert(L1.lnDebt === 1052 && L1.money === 800, "$100 갚기");
+  L1.money = 30;
+  handleMessage(l1, { type: "lnAct", a: "repayAll" });
+  assert(L1.lnDebt === 1022 && L1.money === 0, "돈이 모자라면 가진 만큼만");
+  L1.money = 1100;
+  handleMessage(l1, { type: "lnAct", a: "repayAll" });
+  assert(L1.lnDebt === 0 && L1.money === 78, "전액 갚기");
+  handleMessage(l1, { type: "lnAct", a: "borrow" }); handleMessage(l1, { type: "lnAct", a: "borrow" }); // 마지막 밤: 현금 $278 / 빚 $200 → 순자산 $78 < L2 $900
+  lnReady();
+  const lastChat = JSON.parse(l1.log.filter((d) => d.includes('"chat"')).pop()).text;
+  assert(lr.phase === "final" && lastChat.includes("L2 ($900)"), "최종 우승은 순자산 기준: " + lastChat);
+  handleMessage(l1, { type: "again" });
+  assert(L1.lnDebt === 0 && L1.money === START_MONEY, "새 게임이면 빚 탕감");
+  delete process.env.GAME;
+  }
   console.log("OK");
   process.exit(0);
 }

@@ -63,6 +63,7 @@ const GAMES = [
   { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day }, // 하루 PG_ROUNDS판, cap은 판당
   { key: "nunchi", name: "눈치 숫자", cap: (day) => 50 + 50 * day, min: 3 }, // 하루 NC_ROUNDS판, cap = 판당 고정 참가비. 둘이면 1이 무조건 이득이라 3명부터
   { key: "indian", name: "인디언 포커", cap: (day) => 50 + 50 * day, min: 2 }, // 하루 IP_ROUNDS판, cap = 판당 참가비(고정). 콜도 같은 금액
+  { key: "auction", name: "미스터리 상자 경매", cap: (day) => 100 + 100 * day, min: 2 }, // 하루 AU_ROUNDS판, cap은 판당 입찰 상한
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -262,6 +263,7 @@ function broadcastRoom(room) {
       dice: room.dice,
       ip: room.ip && ipView(room.ip), // 카드·결정은 공개 전까지 절대 내보내지 않는다
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
+      au: room.au && { round: room.au.round, rounds: room.au.rounds, vals: room.au.vals, probs: AU_PROBS, ev: AU_EV, reveal: room.au.reveal }, // 상자 금액·입찰액·힌트는 공개 전까지 절대 안 내보낸다
       nc: room.nc && { round: room.nc.round, rounds: room.nc.rounds, carry: room.nc.carry, picks: room.nc.shown }, // 고른 숫자는 공개(ncReveal) 전까지 절대 안 내보낸다
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, voter: room.vote.voter, game: room.vote.game },
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
@@ -340,6 +342,7 @@ function startDay(room, key) {
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
   room.nc = game.key === "nunchi" ? { round: 1, rounds: NC_ROUNDS, carry: 0, picks: {}, shown: null } : null;
   room.ip = game.key === "indian" ? { round: 1, rounds: IP_ROUNDS, ids: [], cards: {}, calls: {}, open: false, until: 0 } : null;
+  room.au = game.key === "auction" ? auDeal({ round: 1, rounds: AU_ROUNDS, vals: AU_MULTS.map((m) => Math.round(room.cap * m)) }) : null;
   room.race = null;
   room.result = null;
   room.night = null;
@@ -350,6 +353,7 @@ function startDay(room, key) {
   if (room.nc) sys(room, "🙊 1~10 중 남과 안 겹친 가장 작은 숫자가 판돈 독식! (판당 참가비 $" + room.cap + ")");
   if (room.ip) sys(room, "🙈 인디언 포커: " + IP_ROUNDS + "판 · 참가비 $" + room.cap + " · 콜하면 $" + room.cap + " 더 · 10 들고 다이하면 벌금!");
   broadcastRoom(room);
+  if (room.au) room.players.forEach((_, ws) => auSendMe(room, ws)); // 비밀 힌트는 각자에게만
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
 
@@ -361,6 +365,7 @@ function checkAllReady(room) {
   if (room.game === "penguin") return pgStart(room);
   if (room.game === "nunchi") return ncReveal(room);
   if (room.game === "indian") return ipDeal(room);
+  if (room.game === "auction") return auReveal(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -729,6 +734,68 @@ function ipNext(room) {
   checkAllReady(room);
 }
 
+// ---------- 미스터리 상자 경매 ----------
+// 매 판 상자 하나. 금액 = 입찰 상한 × AU_MULTS[k] (확률 AU_PROBS[k], 표는 모두에게 공개), 어느 칸인지는 서버만 안다.
+// 참가자마다 "이 상자는 $X가 아니다" 비밀 힌트 하나(정답은 절대 안 주고, 방 사람끼리 안 겹치게) → 정보 비대칭 + 채팅 블러핑.
+// 밀봉 입찰(0 = 패스) → 전원 준비 → auReveal: 낮은 순서로 공개, 최고가 낙찰(동점은 추첨) → 상자 개봉 → 연출 뒤 정산.
+// 입찰액·힌트·상자는 room.au 안에만(서버 전용), 본인 것은 send로. 하우스 수수료 없음 — 기대값(≈ 상한 × 0.72)보다 비싸게 산 사람이 하우스 몫.
+const AU_ROUNDS = 3;
+const AU_MULTS = [0, 0.25, 0.5, 1, 1.5, 3];
+const AU_PROBS = [0.25, 0.2, 0.2, 0.15, 0.12, 0.08];
+const AU_EV = AU_MULTS.reduce((s, m, i) => s + m * AU_PROBS[i], 0);
+const auOpenAt = (n) => 2.2 + 0.8 * n; // 입찰 n개를 다 공개하고 상자가 열리는 시각(초). 클라이언트와 같아야 함
+
+function auDeal(A) { // 새 상자: 금액 칸을 뽑고, 힌트 후보(정답 뺀 5칸)를 섞어 둔다
+  let r = Math.random(), k = 0;
+  for (; k < AU_PROBS.length - 1 && r >= AU_PROBS[k]; k++) r -= AU_PROBS[k];
+  return Object.assign(A, { box: k, pool: shuffle(AU_MULTS.map((_, i) => i).filter((i) => i !== k)), hints: {}, bids: {}, reveal: null });
+}
+
+function auSendMe(room, ws) { // 내 힌트·입찰액은 나한테만. 힌트는 후보 5칸 중 지금 방 사람들이 안 받은 것 (최대 4명이라 항상 남는다)
+  const A = room.au, p = room.players.get(ws);
+  if (!p.mining && !(p.id in A.hints)) {
+    const used = [...room.players.values()].map((q) => A.hints[q.id]);
+    A.hints[p.id] = A.pool.find((i) => !used.includes(i));
+  }
+  send(ws, { type: "auMe", day: room.day, round: A.round, hint: p.mining ? null : A.hints[p.id], bid: A.bids[p.id] || 0 });
+}
+
+function auBid(room, ws, me, v) { // 0 = 패스. 상한이나 가진 돈보다 크게 부르면 거절 (돈은 낙찰돼야 빠진다)
+  if (!Number.isInteger(v) || v < 0 || v > room.cap || v > me.money) return;
+  room.au.bids[me.id] = v;
+  auSendMe(room, ws);
+}
+
+function auReveal(room) {
+  const A = room.au, bids = [...room.players.values()].filter((p) => A.bids[p.id] > 0).map((p) => ({ id: p.id, bid: A.bids[p.id] }));
+  const price = Math.max(0, ...bids.map((b) => b.bid)), tied = bids.filter((b) => b.bid === price);
+  const winner = tied.length ? tied[Math.floor(Math.random() * tied.length)].id : null;
+  bids.sort((a, b) => a.bid - b.bid || (a.id === winner) - (b.id === winner)); // 낮은 순서로 공개, 동점이면 낙찰자가 마지막
+  A.reveal = { bids, winner, price, value: A.vals[A.box] };
+  room.phase = "auReveal";
+  broadcastRoom(room);
+  room.timer = setTimeout(() => auSettle(room), (auOpenAt(bids.length) + 2.4) * 1000); // 개봉 연출을 보고 나서 정산
+}
+
+function auSettle(room) {
+  const A = room.au, R = A.reveal, w = [...room.players.values()].find((p) => p.id === R.winner), payouts = {};
+  if (w) { w.money += R.value - R.price; payouts[w.id] = { bet: R.price, win: R.value }; } // 낙찰자만 입찰가를 내고 상자를 받는다
+  room.phase = "result";
+  room.result = { ...R, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => {
+    if (A.round >= A.rounds) return startNight(room);
+    A.round++;
+    auDeal(A);
+    room.phase = "betting";
+    room.result = null;
+    for (const p of room.players.values()) p.ready = false;
+    broadcastRoom(room);
+    room.players.forEach((_, ws) => auSendMe(room, ws));
+    checkAllReady(room);
+  }, 5000);
+}
+
 // ---------- 주사위 ----------
 // 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
 // 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
@@ -826,6 +893,7 @@ function joinRoom(ws, room, name) {
   broadcastRoomList();
   if (room.phase === "racing") send(ws, raceMsg(room)); // 경주 도중 입장하면 이어서 관전
   if (room.phase === "ipDecide") ipPeek(ws, room); // 인디언 포커 도중 입장 = 구경꾼이라 카드를 다 본다
+  if (room.au && room.phase === "betting") auSendMe(room, ws); // 경매 도중 입장해도 이번 상자 힌트를 받는다
 }
 
 function leaveRoom(ws) {
@@ -873,6 +941,8 @@ function handleMessage(ws, msg) {
   if (msg.type === "bet" && room.ip) return; // 인디언 포커는 참가비가 고정이라 칩 베팅 대신 ipJoin
   if (msg.type === "ipJoin") return canBet && room.ip ? ipJoin(room, me, !!msg.v) : undefined;
   if (msg.type === "ipAct") return ipAct(room, me, msg.a);
+  if (msg.type === "bet" && room.au) return; // 경매는 밀봉 입찰(auBid)만 받는다 — me.bets는 모두에게 방송되니까
+  if (msg.type === "auBid") return room.au && canBet && auBid(room, ws, me, msg.v);
 
   if (msg.type === "start") {
     if (room.phase === "lobby" && me === hostOf(room)) startVote(room);
@@ -890,6 +960,7 @@ function handleMessage(ws, msg) {
     Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
     room.nc = null;
     room.ip = null;
+    room.au = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     broadcastRoom(room);
     broadcastRoomList();
@@ -1146,6 +1217,71 @@ if (process.argv.includes("--check")) {
   assert(ipR.phase === "night");
   delete process.env.GAME;
   rooms.delete(ipR.code);
+
+  // 미스터리 상자 경매: 분포 · 힌트(정답 아님, 안 겹침) · 입찰이 안 새는지 · 짜고 연 한 판 · 동점 추첨 · 돈보다 큰 입찰 거절
+  assert(Math.abs(AU_PROBS.reduce((a, b) => a + b, 0) - 1) < 1e-9 && AU_PROBS.length === AU_MULTS.length, "상자 확률 합 = 1");
+  assert(AU_EV > 0.7 && AU_EV < 0.8, "상자 기대값은 입찰 상한의 70~80%");
+  console.log("경매 상자", AU_MULTS.map((m, i) => "x" + m + " " + Math.round(AU_PROBS[i] * 100) + "%").join(", "), "| 기대값 x" + AU_EV.toFixed(2));
+  process.env.GAME = "auction";
+  const auFake = () => { const w = { id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, log: [] }; w.send = (d) => w.log.push(JSON.parse(d)); return w; };
+  const au1 = auFake(), au2 = auFake(), au3 = auFake(), auWs = [au1, au2, au3], auRandom = Math.random;
+  handleMessage(au1, { type: "create", name: "A" });
+  handleMessage(au2, { type: "join", id: au1.room.code, name: "B" });
+  handleMessage(au3, { type: "join", id: au1.room.code, name: "C" });
+  handleMessage(au1, { type: "start" });
+  const auRoom = au1.room, [auA, auB, auC] = auWs.map((w) => auRoom.players.get(w)), auLast = (w) => w.log.filter((m) => m.type === "auMe").pop();
+  assert(auRoom.game === "auction" && auRoom.cap === 200 && auRoom.phase === "betting" && auRoom.au.vals.join() === "0,50,100,200,300,600");
+  for (let i = 0; i < 500; i++) { // 힌트: 정답이 아니고 사람끼리 안 겹친다
+    if (i) auDeal(auRoom.au);
+    const h = auWs.map((w) => { if (i) auSendMe(auRoom, w); return auLast(w).hint; });
+    assert(new Set(h).size === 3 && !h.includes(auRoom.au.box) && h.every((x) => x >= 0 && x < AU_MULTS.length), "힌트가 정답이거나 겹침");
+  }
+  handleMessage(au1, { type: "bet", i: 0, amount: 100 }); // 제네릭 베팅은 막힌다
+  handleMessage(au1, { type: "auBid", v: 120 });
+  handleMessage(au2, { type: "auBid", v: 250 }); // 상한 초과 → 거절
+  handleMessage(au2, { type: "auBid", v: 200 });
+  auC.money = 50;
+  handleMessage(au3, { type: "auBid", v: 80 }); // 가진 돈보다 큼 → 거절
+  handleMessage(au3, { type: "auBid", v: 1.5 });
+  assert(auRoom.au.bids[auA.id] === 120 && auRoom.au.bids[auB.id] === 200 && !(auC.id in auRoom.au.bids) && auLast(au1).bid === 120 && auLast(au2).bid === 200);
+  assert(auA.money === 1000 && !Object.keys(auA.bets).length, "입찰해도 공개 전엔 돈도 me.bets도 안 움직인다");
+  handleMessage(au1, { type: "ready", v: true });
+  handleMessage(au2, { type: "ready", v: true });
+  handleMessage(au1, { type: "auBid", v: 10 }); // 준비하면 입찰이 잠긴다
+  assert(auRoom.phase === "betting" && auRoom.au.bids[auA.id] === 120);
+  for (const w of auWs) for (const m of w.log) { // 공개 전까지 오간 메시지에 남의 입찰액·힌트·상자 금액이 없어야 한다
+    if (m.type === "room" && m.room.au) assert(Object.keys(m.room.au).sort().join() === "ev,probs,reveal,round,rounds,vals" && m.room.au.reveal === null && m.room.players.every((p) => !Object.keys(p.bets).length), "방송에 입찰/상자가 샘");
+    if (m.type === "auMe") assert(Object.keys(m).sort().join() === "bid,day,hint,round,type" && [0, auRoom.au.bids[w.id]].includes(m.bid), "남의 입찰액이 샘");
+  }
+  auRoom.au.box = AU_MULTS.indexOf(1.5); // 상자 속 $300으로 조작
+  handleMessage(au3, { type: "ready", v: true });
+  const auR = auRoom.au.reveal;
+  assert(auRoom.phase === "auReveal" && auR.winner === auB.id && auR.price === 200 && auR.value === 300 && auR.bids.map((b) => b.bid).join() === "120,200");
+  assert(auB.money === 1000, "돈은 개봉 연출이 끝난 뒤에 움직인다");
+  clearTimeout(auRoom.timer);
+  auSettle(auRoom);
+  clearTimeout(auRoom.timer);
+  assert(auRoom.phase === "result" && auB.money === 1100 && auA.money === 1000 && auC.money === 50, "B만 -200 +300, 나머지는 그대로");
+  assert.deepStrictEqual(auRoom.result.payouts, { [auB.id]: { bet: 200, win: 300 } });
+  const auTie = [0, 0.99].map((rv) => { // 동점이면 추첨, 낙찰자는 맨 마지막에 공개
+    Math.random = () => rv;
+    auRoom.au.bids = { [auA.id]: 150, [auB.id]: 150 };
+    auReveal(auRoom);
+    clearTimeout(auRoom.timer);
+    Math.random = auRandom;
+    const R = auRoom.au.reveal;
+    assert(R.price === 150 && R.bids.length === 2 && R.bids[1].id === R.winner);
+    return R.winner;
+  });
+  assert(new Set(auTie).size === 2, "동점은 랜덤");
+  auRoom.au.bids = {}; // 아무도 안 사면 상자만 열고 돈은 그대로
+  auReveal(auRoom);
+  clearTimeout(auRoom.timer);
+  auSettle(auRoom);
+  clearTimeout(auRoom.timer);
+  assert(auRoom.result.winner === null && !Object.keys(auRoom.result.payouts).length && auB.money === 1100);
+  delete process.env.GAME;
+  rooms.delete(auRoom.code);
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);

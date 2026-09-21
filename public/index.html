@@ -168,6 +168,13 @@
   #pg-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   #btn-go{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stop{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
   #pg-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  /* 풍선 불기: 커다란 놓기 버튼 하나 */
+  #bl-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  #bl-btn{font-family:var(--font-display);font-size:clamp(12px,3.6vw,18px);font-variant-numeric:tabular-nums;line-height:1.6;border:none;border-radius:18px;padding:24px 6px;cursor:pointer;color:#161320;background:var(--good);box-shadow:0 6px 0 #4a9a5c}
+  #bl-btn:not(:disabled):active{transform:translateY(4px);box-shadow:none}
+  #bl-btn:disabled{opacity:.5;cursor:not-allowed}
+  #bl-btn.bl-done{opacity:1;background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
+  #bl-btn.bl-pop{opacity:1;background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff}
   :is(#bj-actions,#pg-actions) button{font-family:var(--font-display);font-size:13px;border:none;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
   :is(#bj-actions,#pg-actions) button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
   :is(#bj-actions,#pg-actions) button:disabled{opacity:.35;cursor:not-allowed}
@@ -315,6 +322,10 @@
           <button id="btn-go">더 갈래! 🐧<small></small></button>
           <button id="btn-stop">멈출래 ✋<small></small></button>
         </div>
+      </div>
+      <div id="bl-panel" hidden>
+        <div id="bl-hint"></div>
+        <button id="bl-btn">놓기! 🎈</button>
       </div>
       <div id="panel-race" hidden><div class="rows" id="race-rows"></div></div>
       <div id="panel-result" hidden>
@@ -773,6 +784,7 @@
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
+    const bl = r.game === "balloon";
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
@@ -789,14 +801,23 @@
     $("bet-actions").hidden = dice && r.phase !== "betting";
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
+    $("bl-panel").hidden = !bl || !["blCount","blFly","blPop"].includes(r.phase);
+    if(bl) blOnRoom(prev);
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+      balloon: renderBl,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -854,6 +875,7 @@
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
+    if(room.bl && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 풍선 " + room.bl.round + "/" + room.bl.rounds + "판";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -987,6 +1009,18 @@
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
     $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.bl){
+      const B = room.bl, max = res.crash >= B.max;
+      $("result-next").textContent = B.round < B.rounds ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+      $("result-title").textContent = max ? "🎉 x" + B.max + " 상한 도달! 끝까지 버틴 사람은 자동 회수" : "💥 x" + blFix(res.crash) + "에서 펑!";
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, m = res.cashouts[p.id];
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag">'+(m ? "🎈 x"+blFix(m)+"에 놓음" : "💥 못 놓음")+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(mine.win > mine.bet*4 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
     if(room.pg){
       $("result-title").textContent = "🐧 빙산 건너기 결과";
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1198,11 +1232,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1643,6 +1677,139 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 풍선 불기 ----------
+  // 서버는 경과 시간과 성장률만 준다 → 배수 곡선 m(t) = e^(rate·t)는 여기서 그린다. 터지는 배수(crash)는 터진 뒤(또는 전원이 놓은 뒤)에야 내려온다.
+  // 베팅은 블랙잭처럼 칩/준비 버튼, 부푸는 동안엔 커다란 "놓기" 버튼 하나(스페이스바).
+  let blT0 = 0, blVis = {}, blPopAt = 0, blN = 0, blTickAt = 0; // blT0 = 부풀기 시작 시각(performance.now 기준, 카운트다운 중엔 미래), blVis = 플레이어별 연출 상태, blPopAt = 터진 시각(초), blN = 마지막으로 띄운 카운트다운 숫자
+  const blWin = (bet, m) => Math.floor(bet*Math.round(m*100)/100); // 서버 blWin과 같아야 함
+  const blFloor = (m) => Math.floor(m*100+1e-9)/100; // 소수 둘째 자리 내림 (1.15*100 = 114.999… 같은 오차 보정)
+  const blFix = (m) => blFloor(m).toFixed(2);
+  function blOnRoom(prev){ // 서버 경과 시간으로 시작 시각을 맞춘다. 같은 단계 안에서는 가장 이른 추정치(= 지연이 가장 적었던 메시지)를 믿는다
+    const t0 = performance.now()-room.bl.elapsed;
+    if(room.phase === "blCount" || room.phase === "blFly") blT0 = prev === room.phase ? Math.min(blT0, t0) : t0;
+    if(room.phase === "betting" && prev !== "betting"){ blVis = {}; blPopAt = 0; blN = 0; }
+  }
+  function blMult(){ // 지금 화면에 보여줄 배수
+    const B = room.bl;
+    if(room.phase !== "blFly") return room.phase === "blPop" || room.phase === "result" ? B.crash : 1;
+    let t = Math.max(0, performance.now()-blT0);
+    if(B.crash){ const left = Math.max(1, Math.log(B.crash)/B.rate*1000-B.ffAt); t = B.ffAt+left*clamp((t-B.ffAt)/Math.min(left, B.ff), 0, 1); } // 전원이 놓았다 → 터지는 곳까지 빨리 감기
+    return Math.min(Math.exp(B.rate*t/1000), B.crash || B.max);
+  }
+  function renderBl(){
+    const my = me(), B = room.bl, bet = my.bets[0] || 0, betting = room.phase === "betting";
+    document.querySelectorAll(".chip").forEach((c) => { c.disabled = !betting || my.ready || my.mining; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : bet ? "줄 잡기 (준비 완료)" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🎈 " + B.round + "/" + B.rounds + "번째 판 · 내 베팅 $" + bet + " · 풍선이 터지기 전에 놓으면 그때 배수만큼! 최대 x" + B.max + " (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
+    blBtn();
+  }
+  function blBtn(){ // 놓기 버튼. 부푸는 동안엔 장면 루프가 매 프레임 불러서 배수·금액을 갱신한다 (글자가 바뀔 때만 DOM을 건드림)
+    const my = me(), B = room.bl, bet = my.bets[0] || 0, got = B.cash[myId], fly = room.phase === "blFly", pop = room.phase === "blPop", m = blFloor(blMult()), b = $("bl-btn");
+    const txt = !bet ? "이번 판은 구경 중 👀" : got ? "x"+blFix(got)+"에 챙김 ✔ $"+blWin(bet, got) : pop ? "펑! 💥 −$"+bet : fly ? "놓기! 🎈 x"+m.toFixed(2)+" = $"+blWin(bet, m) : "꽉 잡아요… 🎈";
+    const hint = pop ? (B.crash >= B.max ? "🎉 상한 x"+B.max+"까지 버텼어요!" : "💥 x"+blFix(B.crash)+"에서 터졌어요!") : !fly ? "곧 풍선이 부풀어요!" :
+      B.crash ? "⏩ 모두 놓았어요 — 어디서 터졌을지 빨리 감는 중" : !bet ? "누가 제일 오래 버틸까?" : got ? "다른 사람들은 아직 버티는 중…" : "터지기 전에 놓으세요! (스페이스바)";
+    if($("bl-hint").textContent !== hint) $("bl-hint").textContent = hint;
+    if(b.textContent === txt) return;
+    b.textContent = txt; b.disabled = !(fly && bet && !got); b.className = !bet ? "" : got ? "bl-done" : pop ? "bl-pop" : "";
+  }
+  $("bl-btn").addEventListener("click", () => { ensureAudio(); sendMsg({type:"blAct"}); });
+  window.addEventListener("keydown", (e) => { // 스페이스 = 놓기 (채팅 입력 중엔 무시)
+    if(!room || room.phase !== "blFly" || e.key !== " " || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    if(!$("bl-btn").disabled) $("bl-btn").click();
+  });
+
+  // 풍선 하나. (x, ky) = 매듭(아래 끝), r = 세로 반지름, d = 위험도 0~1 (초록 → 노랑 → 빨강). 투표 카드 그림에서도 쓴다
+  function blBalloon(g, x, ky, r, d, now){
+    const rx = r*0.88, cy = ky-r*1.03, hue = 130*(1-d), dark = "hsl("+hue+" 80% 33%)", tw = Math.abs(S(now*4));
+    g.fillStyle = dark; g.beginPath(); g.moveTo(x, ky-r*0.1); g.lineTo(x-r*0.1, ky+r*0.07); g.lineTo(x+r*0.1, ky+r*0.07); g.fill(); // 매듭
+    const gr = g.createRadialGradient(x-rx*0.35, cy-r*0.4, r*0.06, x, cy, r*1.05);
+    gr.addColorStop(0, "hsl("+hue+" 95% 80%)"); gr.addColorStop(0.5, "hsl("+hue+" 80% 52%)"); gr.addColorStop(1, dark);
+    g.fillStyle = gr; g.beginPath(); g.ellipse(x, cy, rx, r, 0, 0, T); g.fill();
+    g.fillStyle = "rgba(255,255,255,.5)"; g.beginPath(); g.ellipse(x-rx*0.45, cy-r*0.42, rx*0.13, r*0.27, 0.5, 0, T); g.fill(); // 광택
+    g.fillStyle = "rgba(255,255,255,"+(0.3+0.7*tw)+")"; g.save(); g.translate(x+rx*0.4, cy-r*0.5); g.rotate(now*2); starPath(g, r*0.06*(1+tw)); g.restore(); // 반짝
+  }
+  // 장면: 잔디밭 위의 공용 풍선. 건 사람들은 매듭에 달린 줄을 쥐고 있다가(wave 포즈) 놓으면 줄이 손에서 풀린다. 터지면 고무 조각 + 화면 흔들림
+  function drawBalloon(ts, dt){
+    const g = ctx, now = ts/1000, B = room.bl, n = room.players.length, res = room.phase === "result" && room.result;
+    const live = room.phase !== "betting", fly = room.phase === "blFly", popped = room.phase === "blPop" || !!res; // 베팅 중엔 지난 판의 cash/crash가 남아 있으니 무시
+    const m = blMult(), d = clamp(Math.log(m)/Math.log(10), 0, 1); // 위험도: x3쯤 노랑, x5 주황, x10부터 새빨강
+    if(room.phase === "blCount"){ const c = Math.ceil((blT0-performance.now())/1000); if(c > 0 && c !== blN){ blN = c; setOverlay(String(c)); sfxBeep(); } } // 카운트다운 숫자는 서버가 준 시작 시각으로 여기서 센다
+    else if(blN){ blN = 0; setOverlay(fly ? "후~!" : "", 700); if(fly) sfxGo(); }
+    if(fly && now-blTickAt > clamp(0.5/Math.pow(m,0.45), 0.07, 0.5)){ blTickAt = now; tone(420*Math.pow(m,0.4), 0.035, "square", 0.035+d*0.03); } // 배수가 오를수록 빠르고 높아지는 틱
+
+    const sky = g.createLinearGradient(0,0,0,H); sky.addColorStop(0,"#3fa0ee"); sky.addColorStop(1,"#d6f0ff");
+    g.fillStyle = sky; g.fillRect(0,0,W,H);
+    if(fly && d > 0.2){ g.fillStyle = "rgba(255,70,70,"+(d-0.2)*0.4*(0.6+0.4*S(now*9))+")"; g.fillRect(0,0,W,H); } // 위험해질수록 하늘이 붉게 깜빡인다
+    const pu = clamp(H/92, 1.9, 3.4), gy = H-3, gh = 7*pu, at = (i) => W*(i+0.5)/n;
+    const bx = W/2, ky0 = gy-21*pu-32, Rm = Math.min(W*0.32, (ky0-6)/2.1), size = (v) => Rm*(0.36+0.64*(1-Math.pow(v,-0.8))); // x2에 절반 남짓, x10이면 거의 다 큰다
+    if(popped && !blPopAt){ // 펑! (도중 입장해서 이미 터져 있었으면 연출은 건너뛴다)
+      blPopAt = room.phase === "blPop" ? now : now-9;
+      if(room.phase === "blPop"){
+        const rp = size(B.crash), hue = 130*(1-d);
+        burst(70, null, ky0-rp, (dx,dy) => ({x:bx+dx*rp*0.5, color:"hsl("+hue+" 80% "+(35+R()*30)+"%)", vx:dx*rp*7, vy:dy*rp*7-80, g:700, life:0.7+R()*0.7, w:4+R()*8, h:3+R()*4, spin:(R()-0.5)*24, rot:R()*3}));
+        emit(null, ky0-rp, {x:bx, ring:1, w:rp*0.6, grow:rp*5, life:0.35, color:"#fff"});
+        tone(110,0.5,"sawtooth",0.22,35); tone(1400,0.07,"square",0.12,300); if(actx) drum(actx.currentTime, 0.4, 0.4, 250);
+        if(B.crash >= B.max){ fireworks(); confetti(120); }
+      }
+    }
+    const shake = popped && now-blPopAt < 0.45 ? (1-(now-blPopAt)/0.45)*10 : 0;
+    g.save(); if(shake) g.translate((R()-0.5)*shake, (R()-0.5)*shake);
+    for(let i=0;i<4;i++){ // 네모 구름
+      const s = (5+(i%3)*3)*clamp(H/300,0.7,1.4), cx = ((i*331+now*(5+i*2))%(W+40*s))-20*s, cy = H*(0.12+0.13*i);
+      g.fillStyle = "rgba(255,255,255,.85)"; g.fillRect(cx, cy, 7*s, 1.7*s); g.fillRect(cx+1.2*s, cy-s, 3*s, s); g.fillRect(cx+3.4*s, cy-1.7*s, 2.4*s, 1.7*s);
+    }
+    for(let k=0;k<=14;k++){ const x = W*k/14, y = 3+S(k/14*PI)*H*0.04; g.fillStyle = PCOL[k%4]; g.beginPath(); g.moveTo(x-W/36, y); g.lineTo(x+W/36, y); g.lineTo(x, y+H*0.05+S(now*3+k)*1.5); g.fill(); } // 만국기
+    g.fillStyle = "#6dbb5d"; g.beginPath(); g.moveTo(0,gy); for(let x=0;x<=W+20;x+=20) g.lineTo(x, gy-gh-8-9*S(x*0.008+1)); g.lineTo(W+20,gy); g.fill();
+    g.fillStyle = "#8fd14f"; g.fillRect(0, gy-gh, W, gh+3); g.fillStyle = "#86c747"; for(let x=0;x<W;x+=120) g.fillRect(x, gy-gh, 60, gh+3);
+
+    // 풍선: 매듭은 제자리, 배수만큼 위로 커진다. 위험할수록 붉어지고 떨린다
+    const jit = fly ? d*d*5 : 0, kx = bx+(R()-0.5)*jit, ky = ky0+(R()-0.5)*jit+(popped ? 0 : S(now*1.5)*2), r = size(m)*(1+0.02*S(now*(5+d*16))*(0.4+d));
+    room.players.forEach((p, i) => { // 줄: 쥐고 있으면 매듭↔손, 놓으면 손에서 풀려 매듭 밑에 대롱대롱, 터지면 매듭 쪽 끝이 바닥에 떨어진다
+      const pay = res && res.payouts[p.id], bet = p.bets[0] || (pay ? pay.bet : 0), got = live && B.cash[p.id], v = blVis[p.id] || (blVis[p.id] = {cashAt:0}), hx = at(i)+3.8*pu, hy = gy-18*pu;
+      if(got && !v.cashAt){ // 방금 놓았다: +$ 팝업과 동전
+        v.cashAt = now;
+        if(fly){ sfxCoin(); emit(null, gy-21*pu-32, {x:at(i), txt:"+$"+(blWin(bet,got)-bet), color:"#7bd88f", vy:-38, life:1.3, w:clamp(pu*5.5,13,20)});
+          for(let k=0;k<12;k++) emit(null, hy, {x:hx, color:k%2?"#ffdd7a":"#e8ac3a", vx:(R()-0.5)*160, vy:-120-R()*140, g:520, life:0.9, w:6, h:4, spin:10}); }
+      }
+      if(!bet || (got && popped)) return;
+      let ax = kx, ay = ky+r*0.07, ex = hx, ey = hy;
+      if(got){ const f = 1-Math.pow(1-clamp((now-v.cashAt)/0.5,0,1),3); ex = hx+(kx+(i-(n-1)/2)*9+S(now*2.2+i)*4-hx)*f; ey = hy+(ay+22-hy)*f; }
+      else if(popped){ const f = clamp((now-blPopAt)/0.5,0,1); ax = kx+(hx+5*pu-kx)*f; ay += (gy-2-ay)*f*f; }
+      g.beginPath(); g.moveTo(ax, ay); g.quadraticCurveTo((ax+ex)/2+S(now*3+i)*4*(1+d*3), (ay+ey)/2+8, ex, ey);
+      g.lineWidth = 3.2; g.strokeStyle = "#161320"; g.stroke(); g.lineWidth = 1.6; g.strokeStyle = PCOL[p.color]; g.stroke();
+    });
+    g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round"; g.strokeStyle = "#161320";
+    if(!popped){
+      blBalloon(g, kx, ky, r, d, now);
+      const fs = clamp(r*0.55, 15, 58);
+      g.font = "800 "+fs+"px Rubik, sans-serif"; g.lineWidth = fs*0.16; g.fillStyle = d > 0.55 && S(now*14) > 0 ? "#ffdd7a" : "#fff";
+      if(room.phase !== "blCount"){ g.strokeText("x"+blFix(m), kx, ky-r*1.03); g.fillText("x"+blFix(m), kx, ky-r*1.03); } // 카운트다운 숫자와 안 겹치게
+      if(fly && B.crash) pill(g, bx, 18, "⏩ 모두 놓았다! 어디서 터질까?", "rgba(11,10,19,.85)", "#fff", clamp(H*0.045, 11, 15));
+    } else { // 터진 자리에 배수가 뿅
+      const pop = clamp((now-blPopAt)/0.25, 0, 1), fs = clamp(H*0.15, 26, 60)*(0.6+0.4*pop+0.25*S(pop*PI)), max = B.crash >= B.max;
+      g.font = "800 "+fs+"px Rubik, sans-serif"; g.lineWidth = 7; g.fillStyle = max ? "#ffdd7a" : "#ff5d72";
+      g.strokeText("x"+blFix(B.crash), bx, ky0-Rm); g.fillText("x"+blFix(B.crash), bx, ky0-Rm);
+      pill(g, bx, ky0-Rm+fs*0.8, max ? "🎉 상한까지 버텼다!" : "💥 펑!", "rgba(11,10,19,.85)", "#fff", clamp(H*0.045, 11, 16));
+    }
+    room.players.forEach((p, i) => {
+      const cx = at(i), pay = res && res.payouts[p.id], bet = p.bets[0] || (pay ? pay.bet : 0), got = live && bet && B.cash[p.id];
+      if(p.id === myId){ g.fillStyle = "rgba(255,221,122,.4)"; g.beginPath(); g.ellipse(cx+pu, gy-pu*0.6, 7*pu, 2*pu, 0, 0, T); g.fill(); }
+      drawPerson(g, p.look, cx, gy, pu, p.mining ? "mine" : got ? "cheer" : bet && popped ? "sad" : bet ? "wave" : "idle", now, i*1.7);
+      const lines = [[p.name, PCOL[p.color]]]; // 아래에서 위로
+      if(got) lines.push(["x"+blFix(got)+" ✔ +$"+(blWin(bet,got)-bet), "#7bd88f"]); else if(bet) lines.push(popped ? ["펑! −$"+bet, "#ff5d72"] : ["🎈 $"+bet, "#fff"]);
+      personLabel(g, p, clamp(cx, 48, W-48), gy-21*pu-2, 11, lines); // 좁은 화면에서 양 끝 사람의 글자가 안 잘리게
+    });
+    stepParticles(dt, null);
+    g.restore(); // 흔들림 해제
+    if(!$("bl-panel").hidden) blBtn();
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1873,7 +2040,8 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
+    balloon:   {name:"풍선 불기", icon:"🎈", sub:"하루 3판 · 터지기 전에 놓아라"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
   let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
@@ -1919,6 +2087,17 @@
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
+    if(key === "balloon"){ // 부풀었다 줄었다 하는 풍선 + 배수
+      const sky = g.createLinearGradient(0,0,0,h*0.6); sky.addColorStop(0,"#3fa0ee"); sky.addColorStop(1,"#d6f0ff");
+      g.fillStyle = sky; g.fillRect(0,0,w,h);
+      g.fillStyle = "rgba(255,255,255,.85)"; for(let i=0;i<2;i++){ const s = h/60, cx = ((i*97+now*8)%(w+20*s))-10*s, cy = h*(0.07+0.2*i); g.fillRect(cx, cy, 7*s, 1.7*s); g.fillRect(cx+1.5*s, cy-s, 3.5*s, s); }
+      const k = 0.5-0.5*Math.cos(now*1.3), m = Math.pow(10, k), r = Math.min(w*0.4, h*0.21)*(0.45+0.55*k), ky = h*0.48+S(now*2)*2, fs = clamp(r*0.5, 9, 24);
+      g.strokeStyle = "#161320"; g.lineWidth = 1.5; g.beginPath(); g.moveTo(w/2, ky); g.quadraticCurveTo(w/2+S(now*2)*8, ky+h*0.1, w/2, ky+h*0.25); g.stroke();
+      blBalloon(g, w/2, ky, r, k*0.75, now);
+      g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round"; g.lineWidth = fs*0.18; g.strokeStyle = "#161320"; g.fillStyle = "#fff";
+      g.strokeText("x"+m.toFixed(2), w/2, ky-r*1.03); g.fillText("x"+m.toFixed(2), w/2, ky-r*1.03);
+      return;
+    }
     if(key === "derby"){
       const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
       sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
@@ -2020,6 +2199,7 @@
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
     if(room.game === "penguin") return drawPenguinGame(ts, dt);
+    if(room.game === "balloon") return drawBalloon(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

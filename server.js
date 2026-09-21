@@ -53,12 +53,14 @@ const DAYS = Number(process.env.DAYS) || 7; // 짧게 한 판 하고 싶으면 D
 const WAGE = 200; // 아오지 탄광 일당
 // 도박 컨텐츠 목록. cap(day) = 그날 한 사람이 걸 수 있는 총액 상한(올인 즉사 방지, 날이 갈수록 판이 커진다).
 // 새 게임을 추가할 땐 여기에 등록하고 startDay에서 key별로 분기하면 된다. (투표 카드용으로 클라이언트 GINFO/drawArt에도)
+// min = 최소 인원(없으면 1). 방 인원이 모자라면 투표 카드/무작위 후보에서 빠진다.
 // 경마 = 하루 1경주, cap은 하루 총액. 블랙잭 = 하루 BJ_HANDS판, cap은 판당(더블다운은 상한과 별개로 판돈만큼 더 낸다).
 const GAMES = [
   { key: "derby", name: "경마", cap: (day) => 200 + 100 * day },
   { key: "blackjack", name: "블랙잭", cap: (day) => 50 + 50 * day },
   { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day }, // 하루 DICE_ROUNDS판, cap은 판당
   { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day }, // 하루 PG_ROUNDS판, cap은 판당
+  { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day }, // 하루 CN_ROUNDS판, cap은 판당 투자금
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -257,6 +259,7 @@ function broadcastRoom(room) {
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
       dice: room.dice,
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
+      cn: room.cn, // 코인: 지금까지의 가격 기록·체결 내역뿐 (미래 가격은 서버에도 없다). 도중 입장자도 이걸로 차트를 그린다
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), left: room.vote.until - Date.now(), pick: room.vote.pick, game: room.vote.game },
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
         dealer: room.bj.hidden ? room.bj.dealer.map((c, i) => (i === 1 ? null : c)) : room.bj.dealer } },
@@ -284,10 +287,12 @@ function sys(room, text) {
 
 // ---------- 게임 투표 (매일 낮 전) ----------
 // 카드 3장 + 무작위 중 하나에 투표. 칸별 확률 = 득표 / 전체 표 (아무도 안 찍으면 카드 3장 균등). 무작위가 뽑히면 전체 GAMES에서 하나.
+const playable = (room) => GAMES.filter((g) => room.players.size >= (g.min || 1));
+
 function startVote(room) {
   if (process.env.GAME) return startDay(room); // 컨텐츠 고정(테스트용)이면 투표할 게 없다
   room.phase = "vote";
-  room.vote = { options: shuffle(GAMES.map((g) => g.key)).slice(0, 3), votes: {}, until: Date.now() + VOTE_SECONDS * 1000, pick: null, game: null };
+  room.vote = { options: shuffle(playable(room).map((g) => g.key)).slice(0, 3), votes: {}, until: Date.now() + VOTE_SECONDS * 1000, pick: null, game: null };
   for (const p of room.players.values()) p.ready = false;
   sys(room, "🗳️ DAY " + (room.day + 1) + " — 오늘 할 도박을 골라주세요!");
   broadcastRoom(room);
@@ -312,7 +317,8 @@ function resolveVote(room) {
   let r = Math.random() * weights.reduce((a, b) => a + b, 0), pick = 0;
   for (; pick < 3 && r >= weights[pick]; pick++) r -= weights[pick];
   V.pick = pick;
-  V.game = pick < 3 ? V.options[pick] : GAMES[Math.floor(Math.random() * GAMES.length)].key;
+  const pool = playable(room);
+  V.game = pick < 3 ? V.options[pick] : pool[Math.floor(Math.random() * pool.length)].key;
   broadcastRoom(room); // 결과는 클라이언트가 룰렛을 다 돌린 뒤에 보여준다 (채팅으로 미리 알리지 않음)
   room.timer = setTimeout(() => startDay(room, V.game), VOTE_REVEAL);
 }
@@ -326,14 +332,17 @@ function startDay(room, key) {
   room.entrants = game.key === "derby" ? pickEntrants() : null;
   room.bj = game.key === "blackjack" ? { hand: 1, hands: BJ_HANDS, dealer: [], hidden: true, deck: bjDeck() } : null;
   room.pg = game.key === "penguin" ? { round: 1, rounds: PG_ROUNDS, probs: PG_PROBS, mults: PG_MULTS } : null;
+  room.cn = game.key === "coin" ? { round: 1, rounds: CN_ROUNDS, ticks: CN_TICKS, fee: CN_FEE, ...cnFresh() } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
   room.race = null;
   room.result = null;
   room.night = null;
   room.vote = null;
   for (const p of room.players.values()) Object.assign(p, { ready: false, begging: false, begged: false, bets: {}, bj: null, pg: null, dayStart: p.money });
+  for (const p of room.players.values()) p.cn = null;
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
   sys(room, "☀️ DAY " + room.day + "/" + DAYS + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
+  if (room.cn) sys(room, "🪙 하루 " + CN_ROUNDS + "판 · 판당 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 싸게 사서 비싸게 파세요 (거래마다 수수료 " + CN_FEE * 100 + "%)");
   broadcastRoom(room);
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
@@ -344,6 +353,7 @@ function checkAllReady(room) {
   if (room.game === "blackjack") return bjDeal(room);
   if (room.game === "dice") return diceRoll(room);
   if (room.game === "penguin") return pgStart(room);
+  if (room.game === "coin") return cnStart(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -536,6 +546,100 @@ function pgSettle(room) {
   }, 5000);
 }
 
+// ---------- 도박 코인 단타 ----------
+// 투자금(me.bets[0])을 들고 30초짜리 장에 들어가 아무 때나 전액 매수 ↔ 전액 매도. p.cn = { cash, coins, last } (안 건 사람은 null = 구경)
+// 가격은 틱마다 그 자리에서 하나씩 만든다 — 미래 가격은 서버에도 없으니 샐 수가 없다. 틱은 가벼운 cnTick 메시지로, room 전체는 체결 때만 보낸다.
+// 드리프트 0(틱도 이벤트도 기댓값 1배)이라 뭘 해도 기대 수익은 0이고 하우스 몫은 거래 수수료뿐 → 한두 번 사고팔면 환급률 97% ~ 94%.
+const CN_ROUNDS = 3;
+const CN_TICK = 250; // 틱 간격(ms)
+const CN_TICKS = 120; // 한 판 = 30초
+const CN_FEE = 0.015; // 거래마다 떼는 수수료
+const CN_VOL = 0.025; // 틱당 변동성
+const CN_NEWS = 0.012; // 틱당 이벤트 확률 (한 판에 한두 번)
+const CN_EVENTS = [ // [뉴스, 최소, 최대 변동률]. 평균을 다 더하면 0 → 이벤트가 끼어도 기댓값은 제자리 (--check에서 확인)
+  ["🚀 일론 트윗", 0.15, 0.4], ["📉 거래소 해킹", -0.45, -0.2], ["🐋 고래 등장", 0.1, 0.3],
+  ["🏛️ 규제 발표", -0.25, -0.1], ["🐕 밈 열풍", 0.1, 0.35], ["🏃 개발자 먹튀", -0.3, -0.1],
+];
+const cnFresh = () => ({ prices: [100], news: [], trades: {} }); // 새 판의 빈 전광판 (시작가 100)
+
+function cnNext(price) { // 다음 가격 하나: 기하 랜덤워크 + 가끔 뉴스. 바닥은 1
+  let next = price * Math.exp(CN_VOL * gauss() - (CN_VOL * CN_VOL) / 2), news = null;
+  if (Math.random() < CN_NEWS) {
+    const [text, a, b] = CN_EVENTS[Math.floor(Math.random() * CN_EVENTS.length)], pct = rnd(a, b);
+    next *= 1 + pct;
+    news = { text, pct: Math.round(pct * 100) };
+  }
+  return [Math.max(1, Math.round(next * 100) / 100), news];
+}
+
+function cnStart(room) {
+  room.phase = "cnMarket";
+  let any = false;
+  for (const p of room.players.values()) { p.cn = p.bets[0] ? { cash: p.bets[0], coins: 0 } : null; any = any || !!p.cn; }
+  broadcastRoom(room);
+  if (!any) return cnClose(room); // 아무도 안 걸었으면(전원 탄광 등) 장을 열 것도 없다
+  room.timer = setTimeout(() => cnTick(room), CN_TICK);
+}
+
+function cnTick(room) {
+  const C = room.cn, t = C.prices.length, [price, news] = cnNext(C.prices[t - 1]);
+  C.prices.push(price);
+  if (news) { news.t = t; C.news.push(news); sys(room, "📰 " + news.text + "! " + (news.pct > 0 ? "+" : "−") + Math.abs(news.pct) + "%"); }
+  broadcast(room, { type: "cnTick", t, price, news });
+  if (t >= CN_TICKS) return cnClose(room);
+  room.timer = setTimeout(() => cnTick(room), CN_TICK);
+}
+
+// 체결은 서버의 현재가로. 매수 = 현금 전액 → 코인, 매도 = 코인 전액 → 현금, 어느 쪽이든 수수료를 뗀다.
+function cnAct(room, me, a) {
+  const C = room.cn, st = me.cn;
+  if (room.phase !== "cnMarket" || !st || Date.now() - (st.last || 0) < 300) return; // 연타 방지 0.3초
+  const t = C.prices.length - 1, price = C.prices[t];
+  if (a === "buy" && st.cash > 0) { st.coins = (st.cash * (1 - CN_FEE)) / price; st.cash = 0; }
+  else if (a === "sell" && st.coins > 0) { st.cash = st.coins * price * (1 - CN_FEE); st.coins = 0; }
+  else return;
+  st.last = Date.now();
+  (C.trades[me.id] = C.trades[me.id] || []).push({ t, side: a, price });
+  broadcastRoom(room);
+}
+
+function cnClose(room) { // 장 마감: 들고 있는 코인은 마감가에 강제 매도. 돈은 마감 연출 뒤(cnSettle)에 움직인다
+  const C = room.cn, t = C.prices.length - 1, price = C.prices[t];
+  room.phase = "cnClose";
+  for (const p of room.players.values()) {
+    if (!p.cn || !p.cn.coins) continue;
+    p.cn.cash = p.cn.coins * price * (1 - CN_FEE);
+    p.cn.coins = 0;
+    (C.trades[p.id] = C.trades[p.id] || []).push({ t, side: "sell", price, forced: true });
+  }
+  broadcastRoom(room);
+  room.timer = setTimeout(() => cnSettle(room), 1800);
+}
+
+function cnSettle(room) {
+  const C = room.cn, payouts = {};
+  for (const p of room.players.values()) {
+    if (!p.cn) continue;
+    const bet = p.bets[0], win = Math.floor(p.cn.cash); // 최종 평가액 = 돌려받는 돈
+    p.money += win;
+    p.bets = {};
+    payouts[p.id] = { bet, win };
+  }
+  room.phase = "result";
+  room.result = { prices: C.prices, trades: C.trades, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => {
+    if (C.round >= C.rounds) return startNight(room);
+    C.round++;
+    Object.assign(C, cnFresh());
+    room.phase = "betting";
+    room.result = null;
+    for (const p of room.players.values()) Object.assign(p, { ready: false, cn: null });
+    broadcastRoom(room);
+    checkAllReady(room);
+  }, 6000);
+}
+
 // ---------- 주사위 ----------
 // 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
 // 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
@@ -684,6 +788,7 @@ function handleMessage(ws, msg) {
   } else if (msg.type === "again") {
     if (room.phase !== "final") return;
     Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
+    room.cn = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     broadcastRoom(room);
     broadcastRoomList();
@@ -712,6 +817,8 @@ function handleMessage(ws, msg) {
     if (room.phase !== "vote" || room.vote.pick !== null || me.ready || ![0, 1, 2, 3].includes(msg.i)) return; // 준비하면 표가 잠긴다
     room.vote.votes[me.id] = msg.i;
     broadcastRoom(room);
+  } else if (msg.type === "cnAct") {
+    cnAct(room, me, msg.a);
   } else if (msg.type === "pg") {
     pgAction(room, me, msg.a);
   } else if (msg.type === "bj") {
@@ -821,6 +928,60 @@ if (process.argv.includes("--check")) {
   assert(G1.money === 900 + 124 && G2.money === 950 && gr.result.payouts[G1.id].win === 124, "2칸(x1.24)에서 멈추면 $124, 풍덩은 0");
   delete process.env.GAME;
   rooms.delete(gr.code);
+
+  // 도박 코인 단타: 이벤트 평균 0 + 끝까지 들고 있어도 기댓값은 제자리(드리프트 0), 그리고 가격을 정해 놓은 한 판
+  assert(Math.abs(CN_EVENTS.reduce((a, e) => a + (e[1] + e[2]) / 2, 0)) < 1e-9, "코인 이벤트 평균이 0이 아님");
+  let cnSum = 0;
+  for (let i = 0; i < 20000; i++) { let v = 100; for (let t = 0; t < CN_TICKS; t++) v = cnNext(v)[0]; cnSum += v; }
+  console.log("코인 평균 마감가", (cnSum / 20000).toFixed(1), "(시작가 100) | 환급률 1회 왕복", ((1 - CN_FEE) ** 2 * 100).toFixed(1) + "%, 2회", ((1 - CN_FEE) ** 4 * 100).toFixed(1) + "%");
+  assert(Math.abs(cnSum / 20000 - 100) < 4, "코인 가격에 드리프트가 있음");
+  process.env.GAME = "coin";
+  const fc = () => { const w = { id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, sent: [], send(d) { w.sent.push(JSON.parse(d)); } }; return w; }; // 받은 메시지를 기록하는 가짜 ws
+  const c1 = fc(), c2 = fc();
+  handleMessage(c1, { type: "create", name: "C1" });
+  handleMessage(c2, { type: "join", id: c1.room.code, name: "C2" });
+  handleMessage(c1, { type: "start" });
+  const cr = c1.room, C1 = cr.players.get(c1), C2 = cr.players.get(c2);
+  assert(cr.game === "coin" && cr.cap === 200 && cr.cn.prices.length === 1);
+  handleMessage(c1, { type: "bet", i: 0, amount: 100 });
+  handleMessage(c2, { type: "bet", i: 0, amount: 50 });
+  handleMessage(c1, { type: "ready", v: true });
+  handleMessage(c2, { type: "ready", v: true });
+  assert(cr.phase === "cnMarket" && C1.cn.cash === 100 && !C1.cn.coins && C1.money === 900, "전원 현금으로 시작");
+  clearTimeout(cr.timer);
+  cnTick(cr); // 틱 한 번 = 가격 하나. 메시지에는 현재가뿐이고 그 뒤의 가격은 서버에도 아직 없다
+  clearTimeout(cr.timer);
+  const tk = c2.sent[c2.sent.length - 1];
+  assert(tk.type === "cnTick" && tk.t === 1 && tk.price === cr.cn.prices[1] && cr.cn.prices.length === 2);
+  assert(Object.keys(tk).every((k) => ["type", "t", "price", "news"].includes(k)) && !JSON.stringify(tk).includes("prices"), "cnTick에 미래 가격이 실려 있음");
+  cr.cn.prices[1] = 100; // 여기서부터는 가격을 직접 정한다: 100에 사서 200에 판다
+  handleMessage(c1, { type: "cnAct", a: "buy" });
+  handleMessage(c1, { type: "cnAct", a: "sell" }); // 연타는 무시 (0.3초 제한)
+  handleMessage(c2, { type: "cnAct", a: "sell" }); // 가진 코인이 없으면 무시
+  handleMessage(c2, { type: "cnAct", a: "buy" });
+  assert(C1.cn.coins > 0 && C1.cn.cash === 0 && !cr.cn.trades[C1.id][1] && cr.cn.trades[C2.id].length === 1);
+  cr.cn.prices.push(200);
+  C1.cn.last = 0;
+  handleMessage(c1, { type: "cnAct", a: "sell" });
+  assert(!C1.cn.coins && C1.money === 900, "돈은 장 마감 뒤에 움직인다");
+  cnClose(cr); // C2는 들고 있다가 마감가 200에 강제 매도
+  clearTimeout(cr.timer);
+  assert(cr.phase === "cnClose" && !C2.cn.coins && cr.cn.trades[C2.id][1].forced && cr.cn.trades[C2.id][1].price === 200);
+  cnSettle(cr);
+  clearTimeout(cr.timer);
+  assert(C1.money === 900 + Math.floor(100 * 0.985 * 2 * 0.985) && cr.result.payouts[C1.id].win === 194, "100에 사서 200에 팔면 $194 (수수료 1.5% 두 번)");
+  assert(C2.money === 950 + Math.floor(50 * 0.985 * 2 * 0.985) && cr.result.prices.length === 3 && cr.result.trades[C1.id].length === 2);
+  rooms.delete(cr.code);
+  const c3 = fc(); // 방이 사라지면(마지막 사람 퇴장) 틱도 멈춘다
+  handleMessage(c3, { type: "create", name: "C3" });
+  handleMessage(c3, { type: "start" });
+  handleMessage(c3, { type: "bet", i: 0, amount: 10 });
+  handleMessage(c3, { type: "ready", v: true });
+  const cr3 = c3.room;
+  assert(cr3.phase === "cnMarket" && !cr3.timer._destroyed);
+  handleMessage(c3, { type: "leave" });
+  assert(!rooms.has(cr3.code) && cr3.timer._destroyed, "빈 방의 틱 타이머가 살아 있음"); // _destroyed = clearTimeout된 Timeout (Node 내부 필드)
+  delete process.env.GAME;
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);

@@ -174,6 +174,16 @@
   #btn-hit{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #btn-stand{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important} #btn-double{background:var(--gold);box-shadow:0 6px 0 var(--gold-shade)}
   :is(#bj-actions,#pg-actions) button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
   #bj-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  /* 도박 코인 단타: 누를 수 있는 쪽은 밝게, 지금 상태인 쪽(.cn-cur)은 금색 테두리로 */
+  #cn-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  #cn-actions button{font-family:var(--font-display);font-size:14px;border:2px solid transparent;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
+  #cn-actions button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.8}
+  #cn-buy{background:var(--good);box-shadow:0 6px 0 #4a9a5c} #cn-sell{background:var(--bad);box-shadow:0 6px 0 #a93246;color:#fff!important}
+  #cn-actions button:disabled{opacity:.3;cursor:not-allowed;box-shadow:none}
+  #cn-actions button.cn-cur{opacity:1;background:var(--panel);color:var(--gold)!important;border-color:var(--gold);box-shadow:0 0 14px rgba(255,221,122,.35)}
+  #cn-actions button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
+  #cn-stat{font-size:16px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums} #cn-stat.cn-up{color:var(--good)} #cn-stat.cn-down{color:var(--bad)}
+  #cn-hint{font-size:12.5px;color:var(--ink-dim);text-align:center}
   #night-title,#final-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
   .mk{font-size:11px;flex:none}
@@ -315,6 +325,14 @@
           <button id="btn-go">더 갈래! 🐧<small></small></button>
           <button id="btn-stop">멈출래 ✋<small></small></button>
         </div>
+      </div>
+      <div id="cn-panel" hidden>
+        <div id="cn-stat"></div>
+        <div id="cn-actions">
+          <button id="cn-buy">매수 🪙<small></small></button>
+          <button id="cn-sell">매도 💵<small></small></button>
+        </div>
+        <div id="cn-hint">스페이스 = 매수↔매도 · B 매수 · S 매도 · 거래마다 수수료 1.5%</div>
       </div>
       <div id="panel-race" hidden><div class="rows" id="race-rows"></div></div>
       <div id="panel-result" hidden>
@@ -753,6 +771,8 @@
       race = { pos: msg.pos, fx: msg.fx, t0: performance.now() - msg.elapsed, won: false };
       fxPrev = []; posPrev = []; fxAcc = [];
       if(msg.elapsed < 500){ setOverlay("출발!", 800); sfxGo(); } else setOverlay("");
+    } else if(msg.type === "cnTick"){
+      cnOnTick(msg);
     } else if(msg.type === "toast"){
       toast(msg.text);
       if(msg.coin) sfxCoin();
@@ -773,6 +793,9 @@
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
+    const cn = r.game === "coin";
+    if(cn && r.phase === "cnMarket" && prev !== "cnMarket"){ setOverlay("🔔 장 시작!", 900); sfxGo(); }
+    if(cn && r.phase === "cnClose" && prev !== "cnClose"){ setOverlay("🔔 장 마감!", 1500); [0,0.22,0.44].forEach((d) => tone(1175,0.5,"triangle",0.12,null,d)); }
     if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
@@ -789,14 +812,22 @@
     $("bet-actions").hidden = dice && r.phase !== "betting";
     $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj || dice || pg;
+    $("cards").hidden = !r.entrants; // 동물 카드는 경마 전용
     $("panel-bj").hidden = r.phase !== "playing" || !bj;
     $("panel-pg").hidden = r.phase !== "playing" || !pg;
+    $("cn-panel").hidden = !cn || (r.phase !== "cnMarket" && r.phase !== "cnClose");
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && pg) renderPg(); else if(!dark && r.entrants) renderBet();
+    const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
+      derby: renderBet,
+      blackjack: renderBj,
+      dice: renderDice,
+      penguin: renderPg,
+      coin: renderCn,
+    }[r.game];
+    if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -854,6 +885,7 @@
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
+    if(room.cn && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 코인 단타 " + room.cn.round + "/" + room.cn.rounds + "판";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -987,6 +1019,18 @@
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
     $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) || (room.pg && room.pg.round < room.pg.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.cn) $("result-next").textContent = room.cn.round < room.cn.rounds ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.cn){
+      const P = res.prices, end = P[P.length-1];
+      $("result-title").textContent = "🔔 장 마감 $" + end.toFixed(2) + " (" + cnPct(end/P[0]-1) + ")";
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, tr = res.trades[p.id] || [];
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag">'+(tr.length ? tr.length+"회 거래"+(tr[tr.length-1].forced ? " · 강제 매도" : "") : "현금 관망")+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(mine.win > mine.bet*1.5 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
     if(room.pg){
       $("result-title").textContent = "🐧 빙산 건너기 결과";
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1198,11 +1242,11 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && !room.pg && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
+    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice || room.pg ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.bj || room.pg ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : 0, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   begBar.addEventListener("click", (e) => {
     ensureAudio();
@@ -1643,6 +1687,146 @@
     stepParticles(dt, null);
   }
 
+  // ---------- 도박 코인 단타 ----------
+  // 베팅은 펭귄처럼 칩/준비 버튼(투자금 = bets[0]), 장중엔 "매수 / 매도" 토글. 가격은 cnTick으로 하나씩 오고 room.cn.prices에 덧붙인다
+  // (room 메시지에는 지금까지의 기록이 통째로 실려 오니 도중 입장해도 차트가 이어진다). 돈·체결은 전부 서버가 정한다.
+  let cnLo = 90, cnHi = 110, cnShown = 100, cnBanner = null, cnHead = {x:0, y:0}, cnSeen = {}, cnPop = {}; // 세로 눈금·부드러운 현재가·뉴스 배너·차트 머리 위치·플레이어별 체결 수·체결 반짝이
+  const cnPrice = () => room.cn.prices[room.cn.prices.length-1];
+  const cnValue = (p) => (p.cn.coins ? p.cn.coins*cnPrice()*(1-room.cn.fee) : p.cn.cash); // 평가액 = 지금 팔면 손에 쥐는 돈 (매도 수수료 포함)
+  const cnEven = (p) => p.bets[0]/(p.cn.coins*(1-room.cn.fee)); // 본전 가격: 이 값에 팔아야 투자금이 그대로 돌아온다
+  const cnPct = (v, d) => (v >= 0 ? "+" : "−")+Math.abs(v*100).toFixed(d == null ? 1 : d)+"%";
+  function renderCn(){
+    const my = me(), C = room.cn, bet = my.bets[0] || 0, betting = room.phase === "betting";
+    document.querySelectorAll(".chip").forEach((c) => { c.disabled = !betting || my.ready || my.mining; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : bet ? "장 입장 (준비 완료)" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🪙 " + C.round + "/" + C.rounds + "번째 판 · 내 투자금 $" + bet + " · 30초 동안 싸게 사서 비싸게 파세요, 거래마다 수수료 " + C.fee*100 + "% (판당 상한 $" + room.cap + " · 남은 한도 $" + Math.max(0, Math.min(room.cap-bet, my.money)) + ")";
+    for(const p of room.players){ // 새 체결: 소리 + 차트 위 반짝이 (처음 보는 사람 = 도중 입장이면 조용히 세기만)
+      const tr = C.trades[p.id] || [];
+      if(cnSeen[p.id] != null && tr.length > cnSeen[p.id]){
+        cnPop[p.id+(tr.length-1)] = performance.now()/1000;
+        if(p.id !== myId) tone(tr[tr.length-1].side === "buy" ? 520 : 390, 0.05, "square", 0.04); else if(tr[tr.length-1].side === "buy") tone(660,0.12,"square",0.1,990); else sfxCoin();
+      }
+      cnSeen[p.id] = tr.length;
+    }
+    cnStat();
+  }
+  function cnStat(){ // 장중 패널: 틱마다 갱신
+    const my = me(), C = room.cn, st = my.cn, open = room.phase === "cnMarket", hold = !!(st && st.coins), bet = my.bets[0] || 0;
+    const left = ((C.ticks-(C.prices.length-1))*0.25).toFixed(1), val = st ? cnValue(my) : 0;
+    $("cn-buy").disabled = !open || !st || hold; $("cn-sell").disabled = !open || !st || !hold;
+    $("cn-buy").classList.toggle("cn-cur", hold); $("cn-sell").classList.toggle("cn-cur", !!st && !hold);
+    $("cn-buy").querySelector("small").textContent = !st ? "" : hold ? "코인 보유 중 · 본전 $"+cnEven(my).toFixed(2) : "전액 코인으로 (B)";
+    $("cn-sell").querySelector("small").textContent = !st ? "" : hold ? "지금 팔면 $"+Math.floor(val)+" (S)" : "현금 $"+Math.floor(val)+" 보유 중";
+    const el = $("cn-stat");
+    el.className = st && Math.floor(val) > bet ? "cn-up" : st && Math.floor(val) < bet ? "cn-down" : "";
+    el.textContent = (st ? "💼 평가액 $"+Math.floor(val)+" ("+cnPct(val/bet-1)+")" : "👀 구경 중 · 현재가 $"+cnPrice().toFixed(2))+(open ? " · ⏱ "+left+"초" : " · 🔔 장 마감");
+  }
+  function cnOnTick(msg){
+    if(!room || !room.cn) return;
+    const C = room.cn;
+    C.prices[msg.t] = msg.price;
+    if(msg.news){ // 뉴스 속보: 배너 + 효과음 + 차트 머리에서 터지는 파티클
+      C.news.push(msg.news); cnBanner = {news:msg.news, at:performance.now()/1000};
+      const up = msg.news.pct > 0; (up ? sfxTurbo : sfxLose)(); if(actx) drum(actx.currentTime, 0.2, 0.08, up ? 3000 : 500);
+      burst(26, null, cnHead.y, (dx,dy) => ({x:cnHead.x, color:up ? "#2ee6a0" : "#ff5d72", vx:dx*200, vy:dy*200-40, g:260, life:0.8, w:3+R()*4, spin:7}));
+      emit(null, cnHead.y, {x:cnHead.x, txt:msg.news.text.split(" ")[0], vy:up ? -70 : 50, life:1.3, w:30});
+    }
+    const ticksLeft = C.ticks-msg.t;
+    if(ticksLeft > 0 && ticksLeft <= 20 && ticksLeft%4 === 0) sfxBeep(); // 마감 5초 전부터 초읽기
+    cnStat();
+  }
+  const cnAct = (a) => { ensureAudio(); sfxChip(); sendMsg({type:"cnAct", a:a}); };
+  $("cn-buy").addEventListener("click", () => cnAct("buy"));
+  $("cn-sell").addEventListener("click", () => cnAct("sell"));
+  window.addEventListener("keydown", (e) => { // 스페이스 = 토글, B = 매수, S = 매도 (한글 자판이어도 되게 e.code, 채팅 입력 중엔 무시)
+    if(!room || !room.cn || room.phase !== "cnMarket" || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    const c = e.code || {" ":"Space", b:"KeyB", s:"KeyS"}[e.key.toLowerCase()]; // code가 빈 환경이면 key로
+    const b = c === "Space" ? ($("cn-buy").disabled ? "cn-sell" : "cn-buy") : {KeyB:"cn-buy", KeyS:"cn-sell"}[c];
+    if(b){ e.preventDefault(); if(!$(b).disabled) $(b).click(); }
+  });
+
+  // 장면: 거래소 전광판. 위 = 현재가·등락률·남은 시간, 가운데 = 1초(4틱)짜리 캔들 차트 + 체결 지점, 아래 = 플레이어들
+  function drawCn(ts, dt){
+    const g = ctx, now = ts/1000, C = room.cn, P = C.prices, n = room.players.length, res = room.phase === "result" && room.result;
+    const GREEN = "#2ee6a0", RED = "#ff5d72", last = P[P.length-1], open = room.phase === "cnMarket", col = last >= P[0] ? GREEN : RED;
+    g.fillStyle = "#080c18"; g.fillRect(0,0,W,H);
+    const flash = cnBanner ? 1-(now-cnBanner.at)/0.7 : 0; // 뉴스가 뜨면 화면이 번쩍
+    if(flash > 0){ g.fillStyle = (cnBanner.news.pct > 0 ? "rgba(46,230,160," : "rgba(255,93,114,")+flash*0.22+")"; g.fillRect(0,0,W,H); }
+    const pu = clamp(H/95, 1.8, 3.4), headH = clamp(H*0.19, 42, 60), x0 = 8, x1 = W-48, y0 = headH+8, y1 = H-21*pu-40;
+    // 세로 눈금은 지금까지의 고가·저가를 부드럽게 따라간다
+    const lo = Math.min(...P, 95), hi = Math.max(...P, 105), pad = (hi-lo)*0.14, k = Math.min(1, dt*6);
+    cnLo += (lo-pad-cnLo)*k; cnHi += (hi+pad-cnHi)*k; cnShown += (last-cnShown)*Math.min(1, dt*14);
+    const X = (t) => x0+(x1-x0)*t/C.ticks, Y = (v) => y1-(y1-y0)*(v-cnLo)/(cnHi-cnLo);
+    // 격자 + 가격 눈금
+    const raw = (cnHi-cnLo)/4, pw = Math.pow(10, Math.floor(Math.log10(raw))), step = [1,2,5,10].find((m) => m*pw >= raw)*pw;
+    g.font = "600 10px Rubik, sans-serif"; g.textAlign = "left"; g.textBaseline = "middle";
+    for(let v=Math.ceil(cnLo/step)*step; v<cnHi; v+=step){ g.fillStyle = "rgba(120,160,255,.1)"; g.fillRect(x0, Math.round(Y(v)), x1-x0, 1); g.fillStyle = "#6f7aa5"; g.fillText("$"+Math.round(v*100)/100, x1+5, Y(v)); }
+    for(let t=0;t<=C.ticks;t+=20){ g.fillStyle = "rgba(120,160,255,.1)"; g.fillRect(Math.round(X(t)), y0, 1, y1-y0); g.fillStyle = "#6f7aa5"; g.textAlign = "center"; if(t) g.fillText(t/4+"s", X(t), y1+7); }
+    g.setLineDash([3,4]); g.strokeStyle = "rgba(255,255,255,.28)"; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, Y(P[0])); g.lineTo(x1, Y(P[0])); g.stroke(); g.setLineDash([]); // 시작가
+    // 뉴스가 터진 자리
+    g.font = clamp(H*0.06, 12, 18)+"px sans-serif"; g.textAlign = "center";
+    for(const nw of C.news){ g.fillStyle = nw.pct > 0 ? "rgba(46,230,160,.25)" : "rgba(255,93,114,.25)"; g.fillRect(X(nw.t)-1, y0, 2, y1-y0); g.fillStyle = "#fff"; g.fillText(nw.text.split(" ")[0], X(nw.t), y0+9); }
+    // 캔들: 오르면 초록, 내리면 빨강. 만들어지는 중인 마지막 캔들은 부드러운 현재가를 따라 움직인다
+    const cw = (x1-x0)/(C.ticks/4);
+    for(let c=0; c*4 < P.length-1; c++){
+      const seg = P.slice(c*4, c*4+5), o = seg[0], cl = open && c*4+5 >= P.length ? cnShown : seg[seg.length-1], cx = X(c*4)+cw/2;
+      g.fillStyle = cl >= o ? GREEN : RED;
+      g.fillRect(cx-0.75, Y(Math.max(...seg, cl)), 1.5, Math.max(1, Y(Math.min(...seg, cl))-Y(Math.max(...seg, cl))));
+      g.fillRect(cx-cw*0.34, Math.min(Y(o), Y(cl)), cw*0.68, Math.max(1.5, Math.abs(Y(o)-Y(cl))));
+    }
+    // 현재가 선 + 오른쪽 가격표
+    const hy = Y(cnShown); cnHead = {x:X(P.length-1), y:hy};
+    g.setLineDash([2,3]); g.strokeStyle = col; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, hy); g.lineTo(x1, hy); g.stroke(); g.setLineDash([]);
+    g.fillStyle = col; rr(g, x1+1, hy-8, 46, 16, 4); g.fill(); g.fillStyle = "#080c18"; g.font = "800 10px Rubik, sans-serif"; g.textAlign = "center"; g.fillText(cnShown.toFixed(cnShown < 1000 ? 1 : 0), x1+24, hy+0.5);
+    if(open && P.length > 1){ g.fillStyle = col; g.globalAlpha = 0.35+0.35*S(now*9); g.beginPath(); g.arc(cnHead.x, hy, 5, 0, T); g.fill(); g.globalAlpha = 1; g.beginPath(); g.arc(cnHead.x, hy, 2.5, 0, T); g.fill(); }
+    const my = me(); // 내가 들고 있으면 본전 가격에 점선
+    if(my && my.cn && my.cn.coins && cnEven(my) > cnLo && cnEven(my) < cnHi){
+      const ey = Y(cnEven(my)); g.setLineDash([6,4]); g.strokeStyle = PCOL[my.color]; g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0, ey); g.lineTo(x1, ey); g.stroke(); g.setLineDash([]);
+      g.font = "800 10px Rubik, sans-serif"; g.textAlign = "left"; g.fillStyle = PCOL[my.color]; g.fillText("본전", x0+3, ey-7);
+    }
+    // 체결 지점: 플레이어 색 세모 (▲ 매수는 가격 아래, ▼ 매도는 가격 위). 방금 체결된 건 고리가 퍼진다
+    for(const p of room.players) (C.trades[p.id] || []).forEach((tr, i) => {
+      const tx = X(tr.t)+(p.color-1.5)*3, buy = tr.side === "buy", ty = Y(tr.price)+(buy ? 10 : -10), r = p.id === myId ? 6 : 4.5, d = buy ? 1 : -1;
+      g.fillStyle = PCOL[p.color]; g.strokeStyle = "#080c18"; g.lineWidth = 2; g.beginPath(); g.moveTo(tx, ty-r*d); g.lineTo(tx+r, ty+r*0.8*d); g.lineTo(tx-r, ty+r*0.8*d); g.closePath(); g.fill(); g.stroke();
+      const born = cnPop[p.id+i];
+      if(born && now-born < 0.6){ g.strokeStyle = PCOL[p.color]; g.globalAlpha = 1-(now-born)/0.6; g.lineWidth = 2.5; g.beginPath(); g.arc(tx, ty, 6+(now-born)*50, 0, T); g.stroke(); g.globalAlpha = 1; }
+    });
+    // 전광판 머리: 현재가(큰 숫자) + 등락률 + 남은 시간
+    const fs = clamp(W/19, 14, 26);
+    g.textAlign = "left"; g.textBaseline = "middle"; g.font = fs+"px 'Press Start 2P', monospace"; g.fillStyle = col;
+    const ptxt = "$"+cnShown.toFixed(2); g.fillText(ptxt, x0+2, headH*0.68);
+    const pw2 = g.measureText(ptxt).width;
+    g.font = "800 "+clamp(fs*0.62, 10, 15)+"px Rubik, sans-serif"; g.fillText((last >= P[0] ? "▲ " : "▼ ")+cnPct(last/P[0]-1), x0+pw2+10, headH*0.7);
+    g.font = "700 9.5px Rubik, sans-serif"; g.fillStyle = "#6f7aa5"; g.fillText("🪙 DOBAK/USD · 수수료 "+C.fee*100+"%", x0+2, 9);
+    const leftS = (C.ticks-(P.length-1))*0.25, tTxt = room.phase === "betting" ? "개장 전" : open ? "⏱ "+leftS.toFixed(1) : "장 마감";
+    g.textAlign = "right"; g.font = "800 "+clamp(fs*0.7, 11, 17)+"px Rubik, sans-serif"; g.fillStyle = open && leftS <= 5 ? RED : "#f5f3fb"; g.fillText(tTxt, W-8, headH*0.68);
+    g.fillStyle = "rgba(120,160,255,.15)"; g.fillRect(0, 0, W, 3); g.fillStyle = open && leftS <= 5 ? RED : "#ffdd7a"; g.fillRect(0, 0, W*(P.length-1)/C.ticks, 3);
+    // 뉴스 배너: 위에서 툭 떨어져 2.4초 머문다
+    if(cnBanner && now-cnBanner.at < 2.4){
+      const a = now-cnBanner.at, nw = cnBanner.news, drop = Math.min(1, a/0.18), out = clamp((2.4-a)/0.3, 0, 1);
+      g.globalAlpha = out; pill(g, W/2+(a < 0.4 ? S(a*60)*3 : 0), y0+18-(1-drop)*40, "📰 "+nw.text+"! "+(nw.pct > 0 ? "+" : "−")+Math.abs(nw.pct)+"%", nw.pct > 0 ? "#0f9d6c" : "#d6283c", "#fff", clamp(W/24, 12, 20)); g.globalAlpha = 1;
+    }
+    // 플레이어들: 보유 중이면 🪙, 수익이면 환호 손실이면 시무룩, 머리 위에 현재 평가액
+    room.players.forEach((p, i) => {
+      const cx = W*(i+0.5)/n, st = p.cn, pay = res && res.payouts[p.id], bet = pay ? pay.bet : p.bets[0] || 0, val = pay ? pay.win : st && bet ? cnValue(p) : bet, d = val-bet;
+      const pose = p.mining ? "mine" : !bet ? "idle" : d > bet*0.02 ? "cheer" : d < -bet*0.02 ? "sad" : "idle"; // 매수 수수료(−1.5%)만으로는 안 운다
+      drawPerson(g, p.look, cx, H-3, pu, pose, now, i*1.7);
+      const lines = [[p.name, PCOL[p.color]]], vc = d > 0.5 ? "#7bd88f" : d < -0.5 ? "#ff5d72" : "#ffdd7a";
+      if(pay) lines.push([(d >= 0 ? "+$" : "−$")+Math.abs(d), vc]);
+      else if(bet && st) lines.push(["$"+Math.floor(val)+" ("+cnPct(val/bet-1, 0)+")", vc]);
+      else if(bet) lines.push(["🪙 $"+bet, "#fff"]);
+      else if(room.phase !== "betting" && !p.mining) lines.push(["구경 중", "#a7a2c4"]);
+      personLabel(g, p, cx, H-3-21*pu, 11, lines);
+      if(st && st.coins){ g.font = pu*6+"px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("🪙", cx+6.5*pu, H-3-13*pu+S(now*5+i)*2); }
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
   const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
   function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
@@ -1873,7 +2057,8 @@
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
     dice:      {name:"주사위", icon:"🎲", sub:"하루 3판 · 두 눈의 합에 베팅"},
-    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"}
+    penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
+    coin:      {name:"도박 코인 단타", icon:"🪙", sub:"하루 3판 · 30초 단타 매매"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
   let voteEnd = 0, roll = null; // voteEnd = 마감(performance.now 기준), roll = 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
@@ -1919,6 +2104,15 @@
 
   // 카드 그림: 각 게임 장면을 작게 흉내 낸다. 아래 절반은 글자가 덮으니 볼거리는 위쪽에
   function drawArt(g, key, w, h, now){
+    if(key === "coin"){ // 어두운 전광판 + 오르락내리락하며 올라가는 차트 선 + 🚀
+      g.fillStyle = "#080c18"; g.fillRect(0,0,w,h);
+      g.fillStyle = "rgba(120,160,255,.09)"; for(let k=1;k<6;k++){ g.fillRect(w*k/6, 0, 1, h); g.fillRect(0, h*k/10, w, 1); }
+      const n = 20, X = (i) => w*0.06+w*0.74*i/(n-1), Y = (i) => h*(0.4-0.014*i)+h*0.05*S(i*1.3+now*1.7)+h*0.03*S(i*2.9-now*2.4);
+      g.lineWidth = 2.5; g.lineCap = "round";
+      for(let i=1;i<n;i++){ g.strokeStyle = Y(i) < Y(i-1) ? "#2ee6a0" : "#ff5d72"; g.beginPath(); g.moveTo(X(i-1),Y(i-1)); g.lineTo(X(i),Y(i)); g.stroke(); }
+      g.font = Math.round(h*0.11)+"px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("🚀", X(n-1)+h*0.04, Y(n-1)-h*0.04);
+      return;
+    }
     if(key === "derby"){
       const lane = h*0.1, y0 = h*0.16, sky = g.createLinearGradient(0,0,0,y0);
       sky.addColorStop(0,"#3fa9f5"); sky.addColorStop(1,"#c9eeff");
@@ -2020,6 +2214,7 @@
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
     if(room.game === "dice") return drawDice(ts, dt);
     if(room.game === "penguin") return drawPenguinGame(ts, dt);
+    if(room.game === "coin") return drawCn(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

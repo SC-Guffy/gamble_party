@@ -261,6 +261,7 @@ function broadcast(room, msg) {
 }
 
 function broadcastRoom(room) {
+  ttRecord(room); // 시상식 칭호 통계 (새 결과일 때만 한 번 기록)
   broadcast(room, {
     type: "room",
     room: { code: room.code, title: room.title, phase: room.phase, day: room.day, days: room.days, game: room.game, cap: room.cap,
@@ -1211,6 +1212,7 @@ function startNight(room) {
     Object.assign(p, { mnEarn: 0, mnDia: 0, mnRock: null }); // 오늘 채굴 기록은 일당으로 바꿨으니 초기화
     if (wage) sys(room, "⛏️ " + p.name + " 탄광 일당 +$" + wage);
     if (p.money === 0) sys(room, "💸 " + p.name + " 파산! 한푼줍쇼는 딱 한 번…");
+    if (p.money === 0) ttOf(p).bankrupt++; if (wage) ttOf(p).mined++; // 시상식 칭호 통계
   }
   broadcastRoom(room);
 }
@@ -1226,6 +1228,7 @@ function checkNightReady(room) {
   }
   if (room.day < room.days) return startVote(room);
   room.phase = "final";
+  ttAward(room); // 시상식 칭호
   const top = [...room.players.values()].sort((a, b) => lnNet(b) - lnNet(a))[0];
   sys(room, "🏆 " + room.days + "일 끝! 최고의 도박꾼은 " + top.name + " ($" + lnNet(top) + ")");
   broadcastRoom(room);
@@ -1314,6 +1317,58 @@ function mnHit(ws, room, me) {
   broadcastRoom(room);
 }
 
+// ---------- 시상식 칭호 ----------
+// 판마다 room.result.payouts({ id: {bet, win} })를 읽어 p.ttStats에 쌓고, 최종 결과 때 각자 칭호 1~2개(p.ttTitles)를 붙인다.
+// 기록은 broadcastRoom에서 한다 → 게임 코드를 안 건드리고, payouts 형식만 지키면 새 게임도 자동으로 잡힌다.
+const ttNew = () => ({ wagered: 0, returned: 0, rounds: 0, bigWin: 0, bigLoss: 0, allIns: 0, bankrupt: 0, mined: 0, begged: 0, given: 0, byGame: {} });
+const ttOf = (p) => p.ttStats || (p.ttStats = ttNew());
+
+function ttRecord(room) {
+  if (room.phase !== "result" || !room.result || room.result === room.ttLast) return;
+  room.ttLast = room.result; // 같은 결과로 여러 번 broadcast돼도 한 번만
+  for (const p of room.players.values()) {
+    const po = (room.result.payouts || {})[p.id];
+    if (!po || !po.bet) continue;
+    const s = ttOf(p), net = po.win - po.bet;
+    s.wagered += po.bet; s.returned += po.win; s.rounds++;
+    s.bigWin = Math.max(s.bigWin, net); s.bigLoss = Math.max(s.bigLoss, -net);
+    if (po.bet >= room.cap || p.money - po.win === 0) s.allIns++; // 상한까지 질렀거나 가진 돈을 다 걸었으면 올인
+    s.byGame[room.game] = (s.byGame[room.game] || 0) + net;
+  }
+}
+
+// [칭호, 점수(s, 최종 순위 0~) → 클수록 유력, null = 자격 없음]. 1등(동점이면 공동)이 받는다. 위에 있는 칭호부터 준다.
+const TT_RULES = [
+  ["🔥 불사조", (s, rank) => (s.bankrupt && rank < 3 ? 1 : null)], // 파산했다가 3위 안으로
+  ["🎰 올인 광", (s) => (s.allIns >= 2 ? s.allIns : null)],
+  ["💎 한탕주의", (s) => (s.bigWin > 0 ? s.bigWin : null)],
+  ...GAMES.map((g) => ["🎯 " + g.name + " 장인", (s) => (s.byGame[g.key] > 0 ? s.byGame[g.key] : null)]),
+  ["📉 하우스의 VIP", (s) => (s.wagered > s.returned ? s.wagered - s.returned : null)],
+  ["🎢 롤러코스터", (s) => (s.bigWin && s.bigLoss ? s.bigWin + s.bigLoss : null)],
+  ["⛏️ 탄광 VIP", (s) => s.mined || null],
+  ["🥺 구걸왕", (s) => s.begged || null],
+  ["😇 적선왕", (s) => s.given || null],
+  ["🍀 타짜", (s) => (s.returned > s.wagered ? s.returned / s.wagered : null)], // 환수율 1위
+  ["🐢 쫄보", (s) => (s.rounds ? -s.wagered / s.rounds : null)], // 판당 평균 베팅 최소
+  ["🧊 강철 멘탈", (s) => (s.rounds && !s.bankrupt ? -s.bigLoss : null)], // 파산 없이 한 판 손실 최소
+];
+
+// 혼자 딴 칭호를 순위대로 한 명씩 돌아가며 하나씩(최대 2개) → 공동 수상은 아직 칭호가 없는 사람에게만 → 그래도 없으면 평범한 도박꾼
+function ttAward(room) {
+  const ps = [...room.players.values()].sort((a, b) => b.money - a.money), won = ps.map(() => []);
+  for (const [name, score] of TT_RULES) {
+    const sc = ps.map((p, rank) => score(ttOf(p), rank)), best = Math.max(...sc.filter((v) => v !== null));
+    const who = ps.map((_, i) => i).filter((i) => sc[i] === best);
+    for (const i of who) won[i].push({ name, solo: who.length === 1 });
+  }
+  ps.forEach((p) => { p.ttTitles = []; });
+  for (const solo of [true, true, false]) ps.forEach((p, i) => {
+    const t = won[i].find((w) => w.solo === solo && !p.ttTitles.includes(w.name));
+    if (t && (solo || !p.ttTitles.length)) p.ttTitles.push(t.name);
+  });
+  for (const p of ps) if (!p.ttTitles.length) p.ttTitles.push("😐 평범한 도박꾼");
+}
+
 function pickLook(room) {
   const others = [...room.players.values()].map((p) => p.look);
   const look = {};
@@ -1340,6 +1395,7 @@ function joinRoom(ws, room, name) {
   room.players.set(ws, { id: ws.id, name: cleanName(name), color, look: pickLook(room), money: START_MONEY, dayStart: START_MONEY, history,
     ready: false, begging: false, begged: false, mining: false, bets: {} });
   rcJoin(ws, room);
+  room.players.get(ws).ttStats = ttNew(); // 시상식 칭호 통계 (도중 입장자도 빈 통계로)
   send(ws, { type: "joined", playerId: ws.id });
   broadcastRoom(room);
   broadcastRoomList();
@@ -1435,6 +1491,7 @@ function handleMessage(ws, msg) {
     room.bl = null;
     room.rcLeft.clear(); rcHostFix(room); // 재접속: 지난 판 스냅샷은 버리고, 끊긴 사람(📴)은 방장 자리에서 뒤로
     for (const p of room.players.values()) p.lnDebt = 0; // 새 게임이면 사채도 탕감
+    for (const p of room.players.values()) Object.assign(p, { ttStats: ttNew(), ttTitles: null }); // 시상식 칭호 초기화
     broadcastRoom(room);
     broadcastRoomList();
   } else if (msg.type === "bet") {
@@ -1482,6 +1539,7 @@ function handleMessage(ws, msg) {
     if (msg.v && (me.money > 0 || me.begged)) return;
     me.begging = !!msg.v;
     if (msg.v) { me.begged = true; sys(room, "🥺 " + me.name + ": 한푼 줍쇼!"); }
+    if (msg.v) ttOf(me).begged++; // 시상식 칭호 통계
     broadcastRoom(room);
     checkNightReady(room);
   } else if (msg.type === "give") {
@@ -1491,6 +1549,7 @@ function handleMessage(ws, msg) {
     me.money -= ALMS;
     to.money += ALMS;
     to.begging = false; // 누가 한 번 주면 그걸로 끝
+    ttOf(me).given++; // 시상식 칭호 통계
     me.history[room.day] = me.money; // 적선은 밤에만 일어난다 → 오늘 밤 그래프에 반영
     to.history[room.day] = to.money;
     me.history[room.day] = lnNet(me); to.history[room.day] = lnNet(to); // 사채: 그래프는 순자산
@@ -2394,6 +2453,49 @@ if (process.argv.includes("--check")) {
   const emMsg = (id, e) => ({ type: "emReact", id, e });
   assert.deepStrictEqual(emGot, [emMsg(emA.id, 3), emMsg(emA.id, 3), emMsg(emB.id, 7), emMsg(emB.id, 7), emMsg(emA.id, 0), emMsg(emA.id, 0)], "이모티콘 검증/연타 제한/브로드캐스트");
   rooms.delete(emA.room.code);
+  { // 시상식 칭호 (지역 변수가 다른 블록과 안 겹치게 따로 묶음)
+    // 같은 결과는 한 번만 기록, 밤 이벤트 기록, 칭호 배정(혼자 딴 것부터·최대 2개·최소 1개), again 후 초기화
+    process.env.GAME = "dice";
+    const t1 = fake(), t2 = fake(), t3 = fake(), t4 = fake();
+    handleMessage(t1, { type: "create", name: "T1" });
+    handleMessage(t2, { type: "join", id: t1.room.code, name: "T2" });
+    handleMessage(t3, { type: "join", id: t1.room.code, name: "T3" });
+    handleMessage(t1, { type: "days", n: 1 });
+    handleMessage(t1, { type: "start" });
+    const tr = t1.room, [T1, T2, T3] = [t1, t2, t3].map((w) => tr.players.get(w));
+    handleMessage(t1, { type: "bet", i: 0, amount: 100 }); // 홀에 상한까지 = 올인
+    handleMessage(t2, { type: "bet", i: 1, amount: 30 });  // 짝, T3은 구경
+    for (const w of [t1, t2, t3]) handleMessage(w, { type: "ready", v: true });
+    clearTimeout(tr.timer);
+    tr.dice.roll = [1, 2]; // 합 3(홀): T1 100 → 190, T2 30 → 0
+    diceSettle(tr);
+    clearTimeout(tr.timer);
+    broadcastRoom(tr); broadcastRoom(tr); // 같은 결과로 몇 번을 보내도
+    assert.deepStrictEqual(T1.ttStats, { ...ttNew(), wagered: 100, returned: 190, rounds: 1, bigWin: 90, allIns: 1, byGame: { dice: 90 } });
+    assert(T2.ttStats.bigLoss === 30 && T2.ttStats.allIns === 0 && T3.ttStats.rounds === 0);
+    tr.game = "zzz"; T2.money = 0; // 병렬로 생길 새 게임 흉내: payouts 형식만 맞으면 잡힌다. 가진 돈을 다 건 판 = 올인
+    tr.result = { payouts: { [T2.id]: { bet: 50, win: 0 }, [T3.id]: { bet: 0, win: 0 } } };
+    broadcastRoom(tr);
+    handleMessage(t4, { type: "join", id: tr.code, name: "T4" }); // 도중 입장 (broadcast가 또 가도 중복 기록 없음)
+    const T4 = tr.players.get(t4);
+    assert(T2.ttStats.allIns === 1 && T2.ttStats.bigLoss === 50 && T2.ttStats.rounds === 2 && T2.ttStats.byGame.zzz === -50 && T3.ttStats.rounds === 0);
+    assert.deepStrictEqual(T4.ttStats, ttNew());
+    T3.mining = true;
+    startNight(tr); // T2 파산, T3 탄광 일당
+    handleMessage(t2, { type: "beg", v: true });
+    handleMessage(t1, { type: "give", to: T2.id });
+    assert(T2.ttStats.bankrupt === 1 && T2.ttStats.begged === 1 && T1.ttStats.given === 1 && T3.ttStats.mined === 1 && T1.ttStats.bankrupt === 0);
+    for (const w of [t1, t2, t3, t4]) handleMessage(w, { type: "ready", v: true });
+    assert(tr.phase === "final"); // 최종: T3 $1200, T4 $1000, T1 $990, T2 $100 (4위라 불사조는 못 받음)
+    assert.deepStrictEqual([T1, T2, T3, T4].map((p) => p.ttTitles), [["💎 한탕주의", "🎯 주사위 장인"], ["📉 하우스의 VIP", "🥺 구걸왕"], ["⛏️ 탄광 VIP"], ["😐 평범한 도박꾼"]]);
+    const ttAll = [T1, T2, T3, T4].flatMap((p) => p.ttTitles);
+    assert(new Set(ttAll).size === ttAll.length && [T1, T2, T3, T4].every((p) => p.ttTitles.length >= 1 && p.ttTitles.length <= 2));
+    T2.money = 1000; ttAward(tr); // 3위 안으로 올라오면 불사조가 먼저
+    assert.deepStrictEqual(T2.ttTitles, ["🔥 불사조", "📉 하우스의 VIP"]);
+    handleMessage(t1, { type: "again" });
+    assert(tr.phase === "lobby" && [T1, T2, T3, T4].every((p) => !p.ttTitles && JSON.stringify(p.ttStats) === JSON.stringify(ttNew())));
+    delete process.env.GAME;
+  }
   console.log("OK");
   process.exit(0);
 }

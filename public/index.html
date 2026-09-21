@@ -351,6 +351,26 @@
   }
   @keyframes em-fade{0%{opacity:0}15%,70%{opacity:1}100%{opacity:0;transform:translateY(-16px)}}
   @media (prefers-reduced-motion: reduce){ .em-fly{animation-name:em-fade} }
+  /* ---------- 시상식 칭호 ---------- 순위 줄 칭호 태그 + 줄을 누르면 펼쳐지는 통계 카드 */
+  #final-rows .row{cursor:pointer}
+  #final-rows .row::after{content:"▾";font-size:11px;color:var(--ink-dim)}
+  #final-rows .row.tt-on::after{content:"▴"}
+  .tt-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+  .tag.tt-tag{background:#4a1f2a;color:#ffc2cc;box-shadow:inset 0 0 0 1px #e8384f;font-size:10.5px}
+  #tt-card{background:#1a1829;border:2px solid var(--panel-edge);border-radius:12px;padding:10px;display:flex;flex-direction:column;gap:7px;font-size:12.5px;text-align:left}
+  .tt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  @media (max-width:520px){ .tt-grid{grid-template-columns:1fr 1fr} }
+  .tt-grid div{background:var(--panel);border-radius:8px;padding:5px 8px}
+  .tt-grid small{display:block;color:var(--ink-dim);font-size:10.5px}
+  .tt-grid b{font-size:14px;font-variant-numeric:tabular-nums}
+  .tt-bar{display:grid;grid-template-columns:minmax(0,7.5em) 1fr 4.8em;gap:6px;align-items:center}
+  .tt-bar span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tt-bar i{position:relative;height:10px;border-radius:3px;background:rgba(255,255,255,.06)}
+  .tt-bar i::after{content:"";position:absolute;left:50%;top:-2px;bottom:-2px;width:1px;background:var(--ink-dim)}
+  .tt-bar b{position:absolute;top:0;bottom:0;border-radius:3px}
+  .tt-bar em{font-style:normal;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+  #tt-card .plus{color:var(--good)} #tt-card .minus{color:var(--bad)}
+  .tt-counts{color:var(--ink-dim)}
 </style>
 </head>
 <body>
@@ -993,6 +1013,7 @@
     if(screens.game.hidden){ show("game"); resizeCanvas(); }
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
+    if(r.phase === "final" && prev !== "final") ttPlan(r); // 시상식 칭호 도장 순서
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
     const nc = r.game === "nunchi";
     const ip = r.game === "indian";
@@ -1503,6 +1524,7 @@
     const r = ranked();
     $("final-title").textContent = "🏆 최고의 도박꾼: " + r[0].name;
     $("final-rows").innerHTML = r.map((p,i) => { const d = p.money-1000; return moneyRow(p, i, '<span class="'+(d>0?"plus":d<0?"minus":"")+'">'+(d>=0?"+":"−")+"$"+Math.abs(d)+"</span>"); }).join("");
+    ttFinal(r); // 시상식 칭호 태그 + 통계 카드
     if(!chartAnim) drawChart($("final-chart"), null);
   }
 
@@ -3258,6 +3280,7 @@
       if(!fin && shown) lines.unshift([(shown>0?"+":"−")+"$"+Math.abs(shown), shown>0 ? "#7bd88f" : "#ff5d72"]);
       personLabel(g, p, cx, y-(pose === "beg" ? 17 : 21)*u-(rank === 0 ? 2.5*u : 0), clamp(u*3.2, 11, 16), lines.reverse());
       lnShark(g, p, cx, y, u, gap, now, i, fin); // 빚이 있으면 사채업자가 옆에 붙는다
+      if(fin) ttStamp(g, p, cx, y-21*u-(rank === 0 ? 2.5*u : 0)-lines.length*clamp(u*3.2, 11, 16)*1.2, clamp(u*3.2, 11, 16), gap*0.9-6); // 시상식 칭호 도장
     });
     stepParticles(dt, null);
   }
@@ -3617,6 +3640,60 @@
     if(e.key !== " " || $("mn-panel").hidden || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
     e.preventDefault();
     if(!e.repeat) mnDig();
+  });
+
+  // ---------- 시상식 칭호 ----------
+  // 서버가 최종 결과 때 붙인 p.ttTitles → 순위 줄 태그 + 시상대 머리 위 도장, p.ttStats → 줄을 누르면 펼쳐지는 통계 카드
+  let ttOpen = null, ttAt = {}, ttHit = {}; // 펼친 카드의 playerId / 사람별 도장 찍히는 시각(초) / 이미 쾅 한 도장
+  function ttPlan(r){ // 그래프가 다 그려지면 꼴찌부터 1등 순으로 한 사람씩 쾅쾅
+    let t = performance.now()/1000+1+0.55*Math.max(1, r.day);
+    ttOpen = null; ttAt = {}; ttHit = {};
+    r.players.slice().sort((a,b) => a.money-b.money).forEach((p) => { ttAt[p.id] = (p.ttTitles || []).map(() => (t += 0.6)); t += 0.5; });
+  }
+  function ttStamp(g, p, cx, y, fs, maxW){ // y = 이름표 위. 크게 떨어져 쾅 찍히고 작게 남는다. 좁으면 "🎯 장인"처럼 줄여 쓴다
+    (p.ttTitles || []).forEach((t, k) => {
+      const age = performance.now()/1000-(ttAt[p.id] || [])[k];
+      if(!(age >= 0)) return;
+      g.font = "800 "+fs+"px Rubik, sans-serif";
+      let s = maxW/(g.measureText(t).width+fs*1.1);
+      if(s < 0.55){ const w = t.split(" "); t = w[0]+" "+w[w.length-1]; s = maxW/(g.measureText(t).width+fs*1.1); }
+      s = clamp(s, 0.5, 0.8);
+      const hw = (g.measureText(t).width+fs*1.1)*s/2, x = clamp(cx, hw+4, W-hw-4), cy = y-(k+0.5)*(fs*1.3+3); // 화면 밖으로 안 나가게, 칸 높이는 고정
+      const e = clamp(age/0.16, 0, 1), z = s*(1+1.8*(1-e)*(1-e));
+      if(e >= 1 && !ttHit[p.id+k]){
+        ttHit[p.id+k] = 1;
+        tone(110,0.22,"square",0.16,45); tone(1500,0.05,"triangle",0.08);
+        emit(null, cy, {x:x, ring:1, w:8, grow:240, life:0.35, color:"#fff"});
+        burst(12, null, cy, (vx,vy) => ({x:x, vx:vx*240, vy:vy*240, g:300, life:0.6, w:4, star:1, spin:6, color:k%2 ? "#ffdd7a" : "#fff"}));
+      }
+      g.save(); g.globalAlpha = e; g.translate(x, cy); g.rotate(k%2 ? 0.06 : -0.06); g.scale(z, z);
+      pill(g, 0, 0, t, "#d7263d", "#fff", fs);
+      g.restore();
+    });
+  }
+  function ttFinal(r){ // renderFinal이 그린 순위 줄(r 순서)에 칭호 태그를 달고, 펼친 사람 줄 밑에 통계 카드
+    [...$("final-rows").children].forEach((row, i) => {
+      const p = r[i];
+      row.dataset.tt = p.id; row.classList.toggle("tt-on", ttOpen === p.id);
+      row.querySelector(".grow").insertAdjacentHTML("beforeend", '<span class="tt-tags">'+(p.ttTitles || []).map((t) => '<span class="tag tt-tag">'+esc(t)+"</span>").join("")+"</span>");
+      if(ttOpen === p.id) row.insertAdjacentHTML("afterend", ttCard(p));
+    });
+  }
+  function ttCard(p){
+    const s = p.ttStats || {byGame:{}}, n = (k) => s[k] || 0, games = Object.entries(s.byGame).sort((a,b) => b[1]-a[1]);
+    const top = Math.max(1, ...games.map((e) => Math.abs(e[1]))), m = (v) => (v >= 0 ? "+$" : "−$")+Math.abs(v);
+    const box = (label, val, cls) => "<div><small>"+label+'</small><b class="'+(cls || "")+'">'+val+"</b></div>";
+    return '<div id="tt-card"><div class="tt-grid">'+box("총 베팅", "$"+n("wagered"))+box("환수율", s.wagered ? Math.round(s.returned/s.wagered*100)+"%" : "-")+
+      box("최대 한 방", "+$"+n("bigWin"), "plus")+box("최대 손실", "−$"+n("bigLoss"), "minus")+"</div>"+
+      (games.length ? games.map(([k,v]) => '<div class="tt-bar"><span>'+(GINFO[k] ? GINFO[k].icon+" "+GINFO[k].name : esc(k))+"</span><i><b style=\""+(v >= 0 ? "left" : "right")+":50%;width:"+Math.abs(v)/top*50+"%;background:var(--"+(v >= 0 ? "good" : "bad")+')"></b></i><em class="'+(v >= 0 ? "plus" : "minus")+'">'+m(v)+"</em></div>").join("")
+        : '<div class="tt-counts">한 판도 안 걸었어요</div>')+
+      '<div class="tt-counts">💸 파산 '+n("bankrupt")+" · ⛏️ 탄광 "+n("mined")+" · 🥺 구걸 "+n("begged")+" · 😇 적선 "+n("given")+" · 🎰 올인 "+n("allIns")+"</div></div>";
+  }
+  $("final-rows").addEventListener("click", (e) => {
+    const row = e.target.closest(".row");
+    if(!row) return;
+    ttOpen = ttOpen === row.dataset.tt ? null : row.dataset.tt;
+    sfxChip(); renderFinal();
   });
 
   let lastTs = null, lastRows = 0;

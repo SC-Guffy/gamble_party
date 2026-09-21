@@ -1,0 +1,9 @@
+{
+  "name": "animal-derby-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "우당탕 동물 경마 - 4인 베팅 파티 게임 (서버 기반 실시간 멀티플레이, 외부 패키지 없음)",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js", "check": "node server.js --check" },
+  "dependencies": {}
+}

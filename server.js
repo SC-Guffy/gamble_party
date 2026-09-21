@@ -53,12 +53,14 @@ const DAYS = Number(process.env.DAYS) || 7; // 짧게 한 판 하고 싶으면 D
 const WAGE = 200; // 아오지 탄광 일당
 // 도박 컨텐츠 목록. cap(day) = 그날 한 사람이 걸 수 있는 총액 상한(올인 즉사 방지, 날이 갈수록 판이 커진다).
 // 새 게임을 추가할 땐 여기에 등록하고 startDay에서 key별로 분기하면 된다. (투표 카드용으로 클라이언트 GINFO/drawArt에도)
+// min = 최소 인원(없으면 1). 방 인원이 모자라면 투표 카드/무작위 후보에서 빠진다.
 // 경마 = 하루 1경주, cap은 하루 총액. 블랙잭 = 하루 BJ_HANDS판, cap은 판당(더블다운은 상한과 별개로 판돈만큼 더 낸다).
 const GAMES = [
   { key: "derby", name: "경마", cap: (day) => 200 + 100 * day },
   { key: "blackjack", name: "블랙잭", cap: (day) => 50 + 50 * day },
   { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day }, // 하루 DICE_ROUNDS판, cap은 판당
   { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day }, // 하루 PG_ROUNDS판, cap은 판당
+  { key: "watergun", name: "러시안 룰렛", cap: (day) => 50 + 50 * day, min: 2 }, // 하루 WG_ROUNDS판, cap = 판당 고정 참가비
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -257,6 +259,7 @@ function broadcastRoom(room) {
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
       dice: room.dice,
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
+      wg: room.wg && wgPublic(room.wg),
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), left: room.vote.until - Date.now(), pick: room.vote.pick, game: room.vote.game },
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
         dealer: room.bj.hidden ? room.bj.dealer.map((c, i) => (i === 1 ? null : c)) : room.bj.dealer } },
@@ -284,10 +287,12 @@ function sys(room, text) {
 
 // ---------- 게임 투표 (매일 낮 전) ----------
 // 카드 3장 + 무작위 중 하나에 투표. 칸별 확률 = 득표 / 전체 표 (아무도 안 찍으면 카드 3장 균등). 무작위가 뽑히면 전체 GAMES에서 하나.
+const playable = (room) => GAMES.filter((g) => room.players.size >= (g.min || 1));
+
 function startVote(room) {
   if (process.env.GAME) return startDay(room); // 컨텐츠 고정(테스트용)이면 투표할 게 없다
   room.phase = "vote";
-  room.vote = { options: shuffle(GAMES.map((g) => g.key)).slice(0, 3), votes: {}, until: Date.now() + VOTE_SECONDS * 1000, pick: null, game: null };
+  room.vote = { options: shuffle(playable(room).map((g) => g.key)).slice(0, 3), votes: {}, until: Date.now() + VOTE_SECONDS * 1000, pick: null, game: null };
   for (const p of room.players.values()) p.ready = false;
   sys(room, "🗳️ DAY " + (room.day + 1) + " — 오늘 할 도박을 골라주세요!");
   broadcastRoom(room);
@@ -312,7 +317,8 @@ function resolveVote(room) {
   let r = Math.random() * weights.reduce((a, b) => a + b, 0), pick = 0;
   for (; pick < 3 && r >= weights[pick]; pick++) r -= weights[pick];
   V.pick = pick;
-  V.game = pick < 3 ? V.options[pick] : GAMES[Math.floor(Math.random() * GAMES.length)].key;
+  const pool = playable(room);
+  V.game = pick < 3 ? V.options[pick] : pool[Math.floor(Math.random() * pool.length)].key;
   broadcastRoom(room); // 결과는 클라이언트가 룰렛을 다 돌린 뒤에 보여준다 (채팅으로 미리 알리지 않음)
   room.timer = setTimeout(() => startDay(room, V.game), VOTE_REVEAL);
 }
@@ -326,6 +332,7 @@ function startDay(room, key) {
   room.entrants = game.key === "derby" ? pickEntrants() : null;
   room.bj = game.key === "blackjack" ? { hand: 1, hands: BJ_HANDS, dealer: [], hidden: true, deck: bjDeck() } : null;
   room.pg = game.key === "penguin" ? { round: 1, rounds: PG_ROUNDS, probs: PG_PROBS, mults: PG_MULTS } : null;
+  room.wg = game.key === "watergun" ? { round: 1, rounds: WG_ROUNDS } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
   room.race = null;
   room.result = null;
@@ -334,6 +341,7 @@ function startDay(room, key) {
   for (const p of room.players.values()) Object.assign(p, { ready: false, begging: false, begged: false, bets: {}, bj: null, pg: null, dayStart: p.money });
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
   sys(room, "☀️ DAY " + room.day + "/" + DAYS + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
+  if (room.wg) sys(room, "💥 하루 " + WG_ROUNDS + "판 · 판당 참가비 $" + room.cap + " 고정 · 6칸 중 1칸에 총알!");
   broadcastRoom(room);
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
@@ -344,6 +352,7 @@ function checkAllReady(room) {
   if (room.game === "blackjack") return bjDeal(room);
   if (room.game === "dice") return diceRoll(room);
   if (room.game === "penguin") return pgStart(room);
+  if (room.game === "watergun") return wgStart(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -536,6 +545,117 @@ function pgSettle(room) {
   }, 5000);
 }
 
+// ---------- 러시안 룰렛 (키 watergun · 접두어 wg — 물총 룰렛으로 시작했다가 리볼버로 바뀌었다) ----------
+// 참가비(= cap 고정, me.bets[0])를 낸 사람들이 돌아가며 6연발 리볼버를 자기 머리에 당긴다. 총알은 딱 1발.
+// 약실(chamber = 총알 위치, shot = 지금까지 빈칸으로 넘어간 수)은 room.wg에만 두고 판이 끝나야 result로 공개한다.
+// 차례마다 당기기(빈칸이면 한 칸 진행 → 다음 사람) 또는 넘기기(판당 1회, 참가비 절반을 판돈에 보태고 같은 칸을 다음 사람에게).
+// 맞은 사람은 낸 돈을 전부 잃고, 나머지가 판돈 × 0.95를 똑같이 나눈다.
+const WG_ROUNDS = 3;
+const WG_SLOTS = 6;
+const WG_TURN = 12000; // 차례당 제한 시간(ms). 넘기면 자동으로 당긴다
+const WG_EDGE = 0.95;
+const wgPublic = (W) => ({ round: W.round, rounds: W.rounds, order: W.order, turn: W.turn, k: WG_SLOTS - W.shot, pot: W.pot, pulls: W.pulls,
+  passed: W.passed, ms: W.until - Date.now(), limit: WG_TURN, busy: W.busy, settling: W.settling }); // 화이트리스트: chamber는 절대 안 나간다
+const wgHere = (room) => room.wg.order.filter((id) => [...room.players.values()].some((p) => p.id === id)); // 아직 방에 있는 참가자
+const wgCur = (room) => [...room.players.values()].find((p) => p.id === room.wg.order[room.wg.turn]);
+
+function wgStart(room) {
+  const W = room.wg, ps = [...room.players.values()].filter((p) => p.bets[0]);
+  if (ps.length < 2) { // 혼자서는 룰렛이 안 된다 → 환불하고 이 판은 무효
+    for (const p of ps) { p.money += p.bets[0]; p.bets = {}; }
+    broadcast(room, { type: "toast", text: "💥 참가자가 2명이 안 돼서 이번 판은 무효! (참가비 환불)" });
+    return wgNext(room);
+  }
+  const ids = ps.map((p) => p.id), k = (W.round - 1) % ids.length; // 판마다 첫 순서를 한 칸씩 돌린다
+  Object.assign(W, { order: ids.slice(k).concat(ids.slice(0, k)), turn: 0, chamber: Math.floor(Math.random() * WG_SLOTS), shot: 0,
+    pot: ps.reduce((a, p) => a + p.bets[0], 0), pulls: [], passed: {}, busy: false, settling: false, loser: null });
+  room.phase = "wgTurn";
+  wgTurn(room);
+}
+
+function wgTurn(room) { // 차례 시작. 제한 시간 안에 안 고르면 자동 당기기
+  room.wg.busy = false;
+  room.wg.until = Date.now() + WG_TURN;
+  broadcastRoom(room);
+  clearTimeout(room.timer);
+  room.timer = setTimeout(() => wgTimeout(room), WG_TURN);
+}
+
+const wgTimeout = (room) => wgAct(room, wgCur(room), "pull"); // 시간 초과 = 자동 당기기
+
+function wgNextTurn(room) { // 다음 사람에게 (나간 사람은 건너뜀). 2명 미만이 남으면 남은 사람이 판돈을 먹는다
+  const W = room.wg, here = wgHere(room);
+  if (here.length < 2) return wgEnd(room, null);
+  do W.turn = (W.turn + 1) % W.order.length; while (!here.includes(W.order[W.turn]));
+  wgTurn(room);
+}
+
+// a: in/out = 베팅 단계의 참가·취소, pull/pass = 자기 차례의 당기기·넘기기
+function wgAct(room, me, a) {
+  const W = room.wg;
+  if (!W || !me) return;
+  if (a === "in" || a === "out") {
+    if (room.phase !== "betting" || me.ready || me.mining) return;
+    if (a === "in" && !me.bets[0] && me.money >= room.cap) { me.money -= room.cap; me.bets = { 0: room.cap }; }
+    else if (a === "out" && me.bets[0]) { me.money += me.bets[0]; me.bets = {}; }
+    else return;
+    return broadcastRoom(room);
+  }
+  if (room.phase !== "wgTurn" || W.busy || W.settling || me.id !== W.order[W.turn]) return;
+  if (a === "pass") {
+    const fee = Math.floor(room.cap / 2);
+    if (W.passed[me.id] || me.money < fee) return;
+    me.money -= fee; me.bets[0] += fee; W.pot += fee; W.passed[me.id] = true;
+    return wgNextTurn(room);
+  }
+  if (a !== "pull") return;
+  const bang = W.shot === W.chamber;
+  W.pulls.push({ id: me.id, bang });
+  if (bang) return wgEnd(room, me.id);
+  W.shot++;
+  W.busy = true; // "철컥" 연출을 보여주고 나서 다음 사람
+  broadcastRoom(room);
+  clearTimeout(room.timer);
+  room.timer = setTimeout(() => wgNextTurn(room), 1400);
+}
+
+function wgEnd(room, loser) { // 탕! 연출이 끝난 뒤에 돈을 움직인다
+  Object.assign(room.wg, { settling: true, loser });
+  broadcastRoom(room);
+  clearTimeout(room.timer);
+  room.timer = setTimeout(() => wgSettle(room), loser ? 2600 : 1000);
+}
+
+function wgSettle(room) {
+  const W = room.wg, payouts = {}, ps = [...room.players.values()].filter((p) => W.order.includes(p.id)); // 나간 사람이 낸 돈은 판돈에 남는다
+  const survivors = ps.filter((p) => p.id !== W.loser), share = Math.floor((W.pot * WG_EDGE) / Math.max(1, survivors.length));
+  for (const p of ps) {
+    const bet = p.bets[0] || 0, win = p.id === W.loser ? 0 : share;
+    p.money += win;
+    p.bets = {};
+    payouts[p.id] = { bet, win };
+  }
+  room.phase = "result";
+  room.result = { loser: W.loser, survivors: survivors.map((p) => p.id), pot: W.pot, pulls: W.pulls, chamber: W.chamber, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => wgNext(room), 5000);
+}
+
+function wgNext(room) { // 다음 판 참가 신청 (마지막 판이었으면 밤)
+  if (room.wg.round >= room.wg.rounds) return startNight(room);
+  room.wg = { round: room.wg.round + 1, rounds: room.wg.rounds };
+  room.phase = "betting";
+  room.result = null;
+  for (const p of room.players.values()) p.ready = false;
+  broadcastRoom(room);
+  checkAllReady(room);
+}
+
+function wgCheck(room) {
+  if (room.phase !== "wgTurn" || room.wg.settling) return;
+  if (!wgCur(room) || wgHere(room).length < 2) wgNextTurn(room);
+}
+
 // ---------- 주사위 ----------
 // 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
 // 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
@@ -652,6 +772,7 @@ function leaveRoom(ws) {
   checkVoteReady(room);
   if (room.bj) bjCheckDone(room); // 나간 사람만 카드를 고민 중이었던 경우
   if (room.pg) pgCheckDone(room);
+  if (room.wg) wgCheck(room); // 차례인 사람이 나갔거나 1명만 남은 경우
 }
 
 function handleMessage(ws, msg) {
@@ -673,6 +794,7 @@ function handleMessage(ws, msg) {
   if (!room) return;
   const me = room.players.get(ws);
   const canBet = room.phase === "betting" && !me.ready && !me.mining;
+  if (msg.type === "bet" && room.wg) return; // 러시안 룰렛은 참가비가 고정 → wgAct "in"으로만
 
   if (msg.type === "start") {
     if (room.phase === "lobby") startVote(room);
@@ -684,6 +806,7 @@ function handleMessage(ws, msg) {
   } else if (msg.type === "again") {
     if (room.phase !== "final") return;
     Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
+    room.wg = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     broadcastRoom(room);
     broadcastRoomList();
@@ -714,6 +837,8 @@ function handleMessage(ws, msg) {
     broadcastRoom(room);
   } else if (msg.type === "pg") {
     pgAction(room, me, msg.a);
+  } else if (msg.type === "wgAct") {
+    wgAct(room, me, msg.a);
   } else if (msg.type === "bj") {
     bjAction(room, me, msg.a);
   } else if (msg.type === "beg") {
@@ -821,6 +946,69 @@ if (process.argv.includes("--check")) {
   assert(G1.money === 900 + 124 && G2.money === 950 && gr.result.payouts[G1.id].win === 124, "2칸(x1.24)에서 멈추면 $124, 풍덩은 0");
   delete process.env.GAME;
   rooms.delete(gr.code);
+
+  // 러시안 룰렛: 총알 위치(1번 칸)와 순서를 정해 놓은 판 — A 당김(빈칸) → B 넘기기 → C 당김(탕). 그다음 판은 넘기기 제한·타임아웃·퇴장
+  process.env.GAME = "watergun";
+  const wgFake = () => ({ id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, log: [], send(d) { this.log.push(d); } });
+  const wgA = wgFake(), wgB = wgFake(), wgC = wgFake(), wgRandom = Math.random;
+  handleMessage(wgA, { type: "create", name: "WA" });
+  handleMessage(wgB, { type: "join", id: wgA.room.code, name: "WB" });
+  handleMessage(wgC, { type: "join", id: wgA.room.code, name: "WC" });
+  handleMessage(wgA, { type: "start" });
+  const wr = wgA.room, WA = wr.players.get(wgA), WB = wr.players.get(wgB), WC = wr.players.get(wgC);
+  const wgLeak = () => [wgA, wgB, wgC].some((w) => w.log.some((d) => d.includes("chamber")));
+  assert(wr.game === "watergun" && wr.cap === 100 && wr.wg.rounds === WG_ROUNDS);
+  handleMessage(wgA, { type: "bet", i: 0, amount: 10 });
+  assert(!WA.bets[0] && WA.money === 1000, "제네릭 칩 베팅은 막혀 있다");
+  Math.random = () => 0.2; // 총알 = 1번 칸 (두 번째로 당기는 칸)
+  for (const w of [wgA, wgB, wgC]) { handleMessage(w, { type: "wgAct", a: "in" }); handleMessage(w, { type: "ready", v: true }); }
+  Math.random = wgRandom;
+  assert(wr.phase === "wgTurn" && wr.wg.pot === 300 && WA.money === 900 && wr.wg.order[0] === WA.id && wr.wg.chamber === 1);
+  handleMessage(wgB, { type: "wgAct", a: "pull" });
+  assert(!wr.wg.pulls.length, "자기 차례가 아니면 무시");
+  handleMessage(wgA, { type: "wgAct", a: "pull" });
+  assert(wr.wg.busy && wr.wg.shot === 1 && !wr.wg.pulls[0].bang);
+  clearTimeout(wr.timer);
+  wgNextTurn(wr);
+  handleMessage(wgB, { type: "wgAct", a: "pass" });
+  assert(WB.money === 850 && wr.wg.pot === 350 && wr.wg.shot === 1 && wr.wg.order[wr.wg.turn] === WC.id, "넘기면 약실은 그대로, 다음 사람 차례");
+  handleMessage(wgC, { type: "wgAct", a: "pull" });
+  assert(wr.wg.settling && WC.money === 900 && WA.money === 900 && !wr.result, "돈은 탕! 연출이 끝난 뒤에 움직인다");
+  assert(!wgLeak(), "총알 위치는 판이 끝나기 전엔 어디에도 내보내지 않는다");
+  clearTimeout(wr.timer);
+  wgSettle(wr);
+  clearTimeout(wr.timer);
+  assert(wr.result.loser === WC.id && wr.result.chamber === 1 && wr.result.payouts[WA.id].win === 166 && wgLeak());
+  assert(WA.money === 1066 && WB.money === 1016 && WC.money === 900, "생존자 2명이 floor(350 × 0.95 / 2) = 166씩");
+  wgNext(wr); // 2번째 판: 순서가 한 칸 돌아 B → C → A
+  Math.random = () => 0.99; // 총알 = 마지막 칸
+  for (const w of [wgA, wgB, wgC]) { handleMessage(w, { type: "wgAct", a: "in" }); handleMessage(w, { type: "ready", v: true }); }
+  Math.random = wgRandom;
+  assert(wr.wg.round === 2 && wr.wg.order[0] === WB.id);
+  handleMessage(wgB, { type: "wgAct", a: "pass" });
+  WC.money = 10;
+  handleMessage(wgC, { type: "wgAct", a: "pass" });
+  assert(wr.wg.order[wr.wg.turn] === WC.id && WC.money === 10 && wr.wg.pot === 350, "돈이 모자라면 못 넘긴다");
+  WC.money = 800;
+  wgTimeout(wr); // 제한 시간 초과 → 자동 당기기
+  assert(wr.wg.pulls.length === 1 && wr.wg.pulls[0].id === WC.id && wr.wg.busy);
+  clearTimeout(wr.timer);
+  wgNextTurn(wr);
+  handleMessage(wgA, { type: "wgAct", a: "pull" });
+  clearTimeout(wr.timer);
+  wgNextTurn(wr);
+  handleMessage(wgB, { type: "wgAct", a: "pass" });
+  assert(wr.wg.order[wr.wg.turn] === WB.id && WB.money === 1016 - 150, "넘기기는 판당 1회");
+  handleMessage(wgB, { type: "leave" }); // 차례인 사람이 나가면 다음 사람으로
+  assert(wr.phase === "wgTurn" && wr.wg.order[wr.wg.turn] === WC.id);
+  handleMessage(wgC, { type: "leave" }); // 1명만 남으면 그 사람이 판돈을 먹는다
+  assert(wr.wg.settling && wr.wg.loser === null);
+  clearTimeout(wr.timer);
+  wgSettle(wr);
+  clearTimeout(wr.timer);
+  assert(WA.money === 966 + Math.floor(350 * WG_EDGE) && wr.result.survivors.length === 1);
+  delete process.env.GAME;
+  rooms.delete(wr.code);
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);

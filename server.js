@@ -62,6 +62,7 @@ const GAMES = [
   { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day }, // 하루 DICE_ROUNDS판, cap은 판당
   { key: "penguin", name: "펭귄 빙산 건너기", cap: (day) => 50 + 50 * day }, // 하루 PG_ROUNDS판, cap은 판당
   { key: "nunchi", name: "눈치 숫자", cap: (day) => 50 + 50 * day, min: 3 }, // 하루 NC_ROUNDS판, cap = 판당 고정 참가비. 둘이면 1이 무조건 이득이라 3명부터
+  { key: "indian", name: "인디언 포커", cap: (day) => 50 + 50 * day, min: 2 }, // 하루 IP_ROUNDS판, cap = 판당 참가비(고정). 콜도 같은 금액
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -259,6 +260,7 @@ function broadcastRoom(room) {
     room: { code: room.code, title: room.title, phase: room.phase, day: room.day, days: room.days, game: room.game, cap: room.cap,
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
       dice: room.dice,
+      ip: room.ip && ipView(room.ip), // 카드·결정은 공개 전까지 절대 내보내지 않는다
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
       nc: room.nc && { round: room.nc.round, rounds: room.nc.rounds, carry: room.nc.carry, picks: room.nc.shown }, // 고른 숫자는 공개(ncReveal) 전까지 절대 안 내보낸다
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, voter: room.vote.voter, game: room.vote.game },
@@ -337,6 +339,7 @@ function startDay(room, key) {
   room.pg = game.key === "penguin" ? { round: 1, rounds: PG_ROUNDS, probs: PG_PROBS, mults: PG_MULTS } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
   room.nc = game.key === "nunchi" ? { round: 1, rounds: NC_ROUNDS, carry: 0, picks: {}, shown: null } : null;
+  room.ip = game.key === "indian" ? { round: 1, rounds: IP_ROUNDS, ids: [], cards: {}, calls: {}, open: false, until: 0 } : null;
   room.race = null;
   room.result = null;
   room.night = null;
@@ -345,6 +348,7 @@ function startDay(room, key) {
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
   sys(room, "☀️ DAY " + room.day + "/" + room.days + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : room.pg ? PG_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
   if (room.nc) sys(room, "🙊 1~10 중 남과 안 겹친 가장 작은 숫자가 판돈 독식! (판당 참가비 $" + room.cap + ")");
+  if (room.ip) sys(room, "🙈 인디언 포커: " + IP_ROUNDS + "판 · 참가비 $" + room.cap + " · 콜하면 $" + room.cap + " 더 · 10 들고 다이하면 벌금!");
   broadcastRoom(room);
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
@@ -356,6 +360,7 @@ function checkAllReady(room) {
   if (room.game === "dice") return diceRoll(room);
   if (room.game === "penguin") return pgStart(room);
   if (room.game === "nunchi") return ncReveal(room);
+  if (room.game === "indian") return ipDeal(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -623,6 +628,107 @@ function ncNext(room) {
   checkAllReady(room);
 }
 
+// ---------- 인디언 포커 ----------
+// 1~10 두 벌(20장)에서 한 장씩 받아 이마에 붙인다: 남의 카드는 다 보이는데 내 카드만 못 본다. 참가비(= room.cap, me.bets[0])를 내고
+// 몰래 콜(참가비만큼 더 냄)/다이를 고르면, 콜한 사람 중 제일 높은 카드가 판돈의 95%를 가져간다(동점이면 나눔). 10을 들고 죽으면 벌금.
+// 카드·결정은 room.ip 안에만 둔다(player 객체는 통째로 브로드캐스트되니까). 남의 카드는 각자에게 ipCards로 따로 보내고,
+// 콜 비용도 공개 뒤 정산(ipSettle) 때 빠진다 → 그 전엔 HUD 금액으로도 누가 콜했는지 알 수 없다.
+const IP_ROUNDS = 3;
+const IP_SECONDS = 20; // 콜/다이 제한 시간. 넘기면 다이
+const IP_REVEAL = 3200; // 공개 연출(카드 뒤집기 → 콜/다이 도장)을 보여주고 정산하기까지(ms)
+const IP_PCT = 95; // 승자 몫(%). 나머지는 하우스 몫
+
+// 모두에게 나가는 정보: 공개 전에는 누가 참가했고(ids) 누가 결정을 마쳤는지(done)만
+const ipView = (I) => ({ round: I.round, rounds: I.rounds, ids: I.ids, done: I.ids.filter((id) => id in I.calls), left: I.until - Date.now(),
+  cards: I.open ? I.cards : null, calls: I.open ? I.calls : null });
+
+function ipJoin(room, me, v) {
+  if (!!me.bets[0] === v || (v && me.money < room.cap)) return;
+  if (v) { me.money -= room.cap; me.bets = { 0: room.cap }; } else { me.money += me.bets[0]; me.bets = {}; }
+  broadcastRoom(room);
+}
+
+// 자기 카드만 뺀 나머지를 그 사람에게만 보낸다. 구경꾼(탄광·도중 입장 포함)은 전부 본다 — 채팅으로 훈수 두는 것도 재미
+function ipPeek(ws, room) {
+  const cards = Object.assign({}, room.ip.cards);
+  delete cards[ws.id];
+  send(ws, { type: "ipCards", cards });
+}
+
+function ipDeal(room) {
+  const I = room.ip, ins = [...room.players.values()].filter((p) => p.bets[0]);
+  if (ins.length < 2) return ipSettle(room); // 상대가 없으면 환불하고 무효
+  const deck = shuffle([...Array(20).keys()].map((k) => (k % 10) + 1));
+  I.ids = ins.map((p) => p.id);
+  for (const id of I.ids) I.cards[id] = deck.pop();
+  I.until = Date.now() + IP_SECONDS * 1000;
+  room.phase = "ipDecide";
+  for (const ws of room.players.keys()) ipPeek(ws, room);
+  broadcastRoom(room);
+  room.timer = setTimeout(() => ipReveal(room), IP_SECONDS * 1000);
+}
+
+function ipAct(room, me, a) {
+  const I = room.ip;
+  if (room.phase !== "ipDecide" || !I.ids.includes(me.id) || me.id in I.calls || (a !== "call" && a !== "die")) return; // 번복 불가
+  if (a === "call" && me.money < room.cap) return; // 돈이 모자라면 콜 불가
+  I.calls[me.id] = a === "call";
+  broadcastRoom(room); // 누가 정했는지만 나간다
+  ipCheckDone(room);
+}
+
+function ipCheckDone(room) {
+  if (room.phase !== "ipDecide") return;
+  for (const p of room.players.values()) if (room.ip.ids.includes(p.id) && !(p.id in room.ip.calls)) return;
+  ipReveal(room);
+}
+
+// 공개: 카드와 결정이 모두에게 나간다. 승패는 여기서 이미 정해졌지만 돈은 연출이 끝난 뒤(ipSettle)에 움직인다.
+function ipReveal(room) {
+  const I = room.ip;
+  clearTimeout(room.timer);
+  for (const id of I.ids) if (!(id in I.calls)) I.calls[id] = false; // 시간 초과·퇴장 = 다이
+  I.open = true;
+  room.phase = "ipReveal";
+  broadcastRoom(room);
+  room.timer = setTimeout(() => ipSettle(room), IP_REVEAL);
+}
+
+// payouts: bet = 낸 돈 전부(참가비 + 콜 + 벌금), win = 돌려받는 돈. 도중에 나간 사람의 참가비는 판돈에 남는다(I.ids 기준).
+function ipSettle(room) {
+  const I = room.ip, cap = room.cap, payouts = {}, penalties = {};
+  const ins = [...room.players.values()].filter((p) => p.bets[0]);
+  const callers = ins.filter((p) => I.calls[p.id]);
+  const best = Math.max(...callers.map((p) => I.cards[p.id]));
+  const winners = callers.filter((p) => I.cards[p.id] === best);
+  let pot = I.ids.length * cap;
+  for (const p of ins) {
+    const call = I.calls[p.id] ? cap : 0;
+    const fine = winners.length && !call && I.cards[p.id] === 10 ? Math.min(cap, p.money) : 0; // 10을 들고 죽었다 (콜한 사람이 없으면 벌금도 없다)
+    if (fine) penalties[p.id] = fine;
+    p.money -= call + fine;
+    pot += call + fine;
+    payouts[p.id] = { bet: cap + call + fine, win: winners.length ? 0 : cap }; // 아무도 콜 안 했거나 무효면 참가비 환불
+  }
+  for (const p of winners) payouts[p.id].win = Math.floor(pot * IP_PCT / 100 / winners.length);
+  for (const p of ins) { p.money += payouts[p.id].win; p.bets = {}; }
+  room.phase = "result";
+  room.result = { cards: I.cards, calls: I.calls, winners: winners.map((p) => p.id), pot: winners.length ? pot : 0, penalties, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => ipNext(room), 5500);
+}
+
+function ipNext(room) {
+  const I = room.ip;
+  if (I.round >= I.rounds) return startNight(room);
+  Object.assign(I, { round: I.round + 1, ids: [], cards: {}, calls: {}, open: false });
+  room.phase = "betting";
+  room.result = null;
+  for (const p of room.players.values()) p.ready = false;
+  broadcastRoom(room);
+  checkAllReady(room);
+}
+
 // ---------- 주사위 ----------
 // 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
 // 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
@@ -719,6 +825,7 @@ function joinRoom(ws, room, name) {
   broadcastRoom(room);
   broadcastRoomList();
   if (room.phase === "racing") send(ws, raceMsg(room)); // 경주 도중 입장하면 이어서 관전
+  if (room.phase === "ipDecide") ipPeek(ws, room); // 인디언 포커 도중 입장 = 구경꾼이라 카드를 다 본다
 }
 
 function leaveRoom(ws) {
@@ -739,6 +846,7 @@ function leaveRoom(ws) {
   checkVoteReady(room);
   if (room.bj) bjCheckDone(room); // 나간 사람만 카드를 고민 중이었던 경우
   if (room.pg) pgCheckDone(room);
+  if (room.ip) ipCheckDone(room); // 나간 사람만 콜/다이를 고민 중이었던 경우 (나간 사람은 다이로 친다)
 }
 
 function handleMessage(ws, msg) {
@@ -762,6 +870,9 @@ function handleMessage(ws, msg) {
   const canBet = room.phase === "betting" && !me.ready && !me.mining;
   if (msg.type === "bet" && room.nc) return; // 눈치 숫자는 ncPick으로만 참가한다 (참가비 고정)
   if (msg.type === "ncPick") { if (canBet && room.nc) ncPick(room, ws, me, msg.n); return; }
+  if (msg.type === "bet" && room.ip) return; // 인디언 포커는 참가비가 고정이라 칩 베팅 대신 ipJoin
+  if (msg.type === "ipJoin") return canBet && room.ip ? ipJoin(room, me, !!msg.v) : undefined;
+  if (msg.type === "ipAct") return ipAct(room, me, msg.a);
 
   if (msg.type === "start") {
     if (room.phase === "lobby" && me === hostOf(room)) startVote(room);
@@ -778,6 +889,7 @@ function handleMessage(ws, msg) {
     if (room.phase !== "final") return;
     Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
     room.nc = null;
+    room.ip = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     broadcastRoom(room);
     broadcastRoomList();
@@ -965,6 +1077,75 @@ if (process.argv.includes("--check")) {
   clearTimeout(nr.timer);
   delete process.env.GAME;
   rooms.delete(nr.code);
+
+  // 인디언 포커: 공개 전엔 자기 카드·남의 결정이 안 샌다 + 짜고 친 네 판
+  // (콜·콜·시간 초과 다이+10 벌금 / 전원 다이 → 환불 / 도중 퇴장 + 동점 나눔 / 상대가 없으면 무효)
+  process.env.GAME = "indian";
+  assert(!playable({ players: { size: 1 } }).some((g) => g.key === "indian"), "혼자서는 못 한다");
+  const ipFake = () => { const w = { id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, sent: [], send: (d) => w.sent.push(JSON.parse(d)) }; return w; };
+  const ipW = [ipFake(), ipFake(), ipFake(), ipFake()]; // A, B, C + 구경꾼
+  handleMessage(ipW[0], { type: "create", name: "A" });
+  for (const w of ipW.slice(1)) handleMessage(w, { type: "join", id: ipW[0].room.code, name: "X" });
+  handleMessage(ipW[0], { type: "start" });
+  const ipR = ipW[0].room, [ipA, ipB, ipC] = ipW.map((w) => ipR.players.get(w));
+  const ipGo = (ws) => { for (const w of ws) handleMessage(w, { type: "ipJoin", v: true }); for (const w of ipW) handleMessage(w, { type: "ready", v: true }); };
+  const ipRun = (f) => { clearTimeout(ipR.timer); f(ipR); clearTimeout(ipR.timer); }; // 타이머 콜백을 직접 부른다
+  const ipRig = (cards) => [ipA, ipB, ipC].forEach((p, k) => { if (p.id in ipR.ip.cards) ipR.ip.cards[p.id] = cards[k]; });
+  assert(ipR.game === "indian" && ipR.cap === 100 && ipR.ip.rounds === IP_ROUNDS);
+  handleMessage(ipW[0], { type: "bet", i: 0, amount: 50 });
+  assert(ipA.money === 1000, "칩 베팅은 막혀 있다 (참가비 고정)");
+  ipGo(ipW.slice(0, 3));
+  assert(ipR.phase === "ipDecide" && ipA.money === 900 && ipR.ip.ids.length === 3);
+  ipRig([7, 3, 10]);
+  handleMessage(ipW[0], { type: "ipAct", a: "call" });
+  handleMessage(ipW[0], { type: "ipAct", a: "die" }); // 번복 불가
+  handleMessage(ipW[3], { type: "ipAct", a: "call" }); // 구경꾼은 못 낀다
+  handleMessage(ipW[1], { type: "ipAct", a: "call" });
+  assert(ipR.phase === "ipDecide" && ipR.ip.calls[ipA.id] === true && !(ipW[3].id in ipR.ip.calls) && ipA.money === 900, "콜 비용은 공개 전엔 안 빠진다 (HUD 스포일러 방지)");
+  for (const w of ipW) {
+    const peek = w.sent.filter((m) => m.type === "ipCards"), views = w.sent.filter((m) => m.type === "room" && m.room.ip).map((m) => m.room.ip);
+    assert(peek.length === 1 && !(w.id in peek[0].cards) && Object.keys(peek[0].cards).length === (w === ipW[3] ? 3 : 2), "자기 카드만 빼고 받는다 (구경꾼은 전부)");
+    assert(views.every((v) => v.cards === null && v.calls === null) && views[views.length - 1].done.length === 2, "공개 전엔 누가 정했는지만 나간다");
+    assert(!JSON.stringify(w.sent.filter((m) => m.type === "room").map((m) => m.room.players)).includes("card"), "player 객체에는 카드가 없다");
+  }
+  ipRun(ipReveal); // 20초 타이머: 결정 안 한 C는 다이
+  const ipLast = ipW[0].sent[ipW[0].sent.length - 1].room;
+  assert(ipR.phase === "ipReveal" && ipLast.ip.cards[ipA.id] === 7 && ipLast.ip.calls[ipC.id] === false && ipA.money === 900, "공개는 하되 돈은 연출이 끝난 뒤에 움직인다");
+  ipRun(ipSettle);
+  assert(ipA.money === 800 + 570 && ipB.money === 800 && ipC.money === 800, "A: floor((참가비 300 + 콜 200 + 벌금 100) × 0.95) = 570, C: 10 들고 다이 → 벌금 100");
+  assert.deepStrictEqual(ipR.result.winners, [ipA.id]);
+  assert.deepStrictEqual(ipR.result.penalties, { [ipC.id]: 100 });
+  assert.deepStrictEqual(ipR.result.payouts, { [ipA.id]: { bet: 200, win: 570 }, [ipB.id]: { bet: 200, win: 0 }, [ipC.id]: { bet: 200, win: 0 } });
+  assert(ipR.result.pot === 600 && !ipA.bets[0]);
+  ipRun(ipNext);
+  ipGo(ipW.slice(0, 2)); // 2판: C는 구경
+  ipRig([10, 4]);
+  ipB.money = 50;
+  handleMessage(ipW[1], { type: "ipAct", a: "call" });
+  assert(!(ipB.id in ipR.ip.calls), "돈이 모자라면 콜 불가");
+  ipB.money = 700;
+  handleMessage(ipW[0], { type: "ipAct", a: "die" });
+  handleMessage(ipW[1], { type: "ipAct", a: "die" });
+  assert(ipR.phase === "ipReveal", "전원 결정하면 바로 공개");
+  ipRun(ipSettle);
+  assert(ipA.money === 1370 && ipB.money === 800 && ipR.result.pot === 0 && !ipR.result.winners.length && !ipR.result.penalties[ipA.id], "아무도 콜 안 하면 환불, 10을 들고 죽어도 벌금 없음");
+  ipRun(ipNext);
+  ipGo(ipW.slice(0, 3)); // 3판: C가 고민하다 나간다 → 다이 처리, 참가비는 판돈에 남는다
+  ipRig([5, 5, 9]);
+  handleMessage(ipW[0], { type: "ipAct", a: "call" });
+  handleMessage(ipW[1], { type: "ipAct", a: "call" });
+  leaveRoom(ipW[2]);
+  assert(ipR.phase === "ipReveal" && ipR.ip.calls[ipC.id] === false);
+  ipRun(ipSettle);
+  assert(ipA.money === 1370 - 200 + 237 && ipB.money === 800 - 200 + 237 && ipR.result.winners.length === 2, "동점이면 floor(500 × 0.95 ÷ 2)씩");
+  ipR.ip.rounds = 4; // 체크용으로 한 판 더
+  ipRun(ipNext);
+  ipGo(ipW.slice(0, 1)); // 4판: 혼자 참가 → 무효, 참가비 환불
+  assert(ipR.phase === "result" && ipA.money === 1407 && !ipR.result.winners.length && !ipR.ip.ids.length);
+  ipRun(ipNext);
+  assert(ipR.phase === "night");
+  delete process.env.GAME;
+  rooms.delete(ipR.code);
 
   // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
   assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);

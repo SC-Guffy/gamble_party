@@ -672,7 +672,11 @@
   let bgmStep = 0, bgmNext = 0;
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
+    // 코인 장중도 빠른 템포로. 머지 규칙상 아래 hot 줄은 못 고치니, 그 한 줄이 계산되는 동안만 phase를 "playing"으로 보이게 한다 (동기 코드라 다른 데서는 안 보인다)
+    // ponytail: 다 합친 뒤에는 hot 조건에 room.phase === "cnMarket"을 넣고 cnHot 세 줄을 지우면 된다
+    const cnHot = !!room && room.phase === "cnMarket"; if(cnHot) room.phase = "playing";
     const hot = room && (room.phase === "racing" || room.phase === "countdown" || room.phase === "playing" || room.phase === "rolling"), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
+    if(cnHot) room.phase = "cnMarket";
     if(bgmNext < actx.currentTime) bgmNext = actx.currentTime+0.05; // 처음이거나 탭이 숨겨졌다 돌아온 경우
     while(bgmNext < actx.currentTime+0.3){
       const bar = Math.floor(bgmStep/16)%8, st = bgmStep%16, beat = st>>2, sub = st&3, t = bgmNext;

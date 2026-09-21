@@ -227,6 +227,9 @@
   .vbar{display:flex;gap:4px;justify-content:center;width:80%;margin-top:8px}
   .vbar i{flex:1;max-width:44px;height:16px;border-radius:2px;background:rgba(255,255,255,.12);transform:skewX(-20deg);display:grid;place-items:center;font-style:normal;font-size:10px;line-height:1;color:#0b1020}
   .vbar i span{transform:skewX(20deg)}
+  .vbar i.hl{position:relative;z-index:1;transform:skewX(-20deg) scale(1.3);box-shadow:0 0 0 2px #fff,0 0 16px #fff!important} /* 룰렛이 짚고 있는 표 */
+  .vbar i.blip{animation:blip .16s ease-out}
+  @keyframes blip{from{transform:skewX(-20deg) scale(1.75)}}
   .vcnt{font-size:11px;color:#cfe3f7;font-variant-numeric:tabular-nums;white-space:nowrap}
   #vote-random{width:100%;max-width:560px;box-sizing:border-box;display:flex;align-items:center;gap:12px;margin-top:10px;padding:6px 18px 6px 6px;border-radius:999px;background:rgba(8,20,42,.8)}
   #vote-random .vicon{width:36px;height:36px;font-size:17px;margin:0}
@@ -1920,7 +1923,8 @@
   }
 
   // ---------- 게임 투표 (낮이 오기 전) ----------
-  // 서버가 랜덤으로 고른 게임 카드 3장 + 무작위. 서버가 득표 비례 확률로 뽑으면 여기선 룰렛을 돌려 보여주기만 한다.
+  // 서버가 랜덤으로 고른 게임 카드 3장 + 무작위. 서버가 표 한 장을 뽑으면(voter) 여기선 룰렛을 돌려 보여주기만 한다:
+  // 게이지의 표(마크)를 하나씩 짚으며 삐비비빅 돌다가 뽑힌 표에서 멈추고, 그다음 그 표가 있는 카드에 불이 들어온다.
   const GINFO = {
     derby:     {name:"경마",   icon:"🏇", sub:"하루 1경주 · 1등을 맞혀라"},
     blackjack: {name:"블랙잭", icon:"🃏", sub:"하루 3판 · 딜러와 21 승부"},
@@ -1928,7 +1932,7 @@
     penguin:   {name:"펭귄 빙산 건너기", icon:"🐧", sub:"하루 3판 · 멈출 때를 알아라"},
   };
   const VBAR = '<span class="vbar"></span><span class="vcnt"></span>';
-  let roll = null; // 룰렛 {t0, seq: 불이 들어오는 칸 순서, at: 각 칸의 시각(초), k}
+  let roll = null; // 룰렛 {t0, seq: 짚는 표(플레이어 id) 순서, at: 각 표의 시각(초), k, done}
   function buildVote(){
     $("vote-cards").innerHTML = room.vote.options.map((k,i) => '<button class="vote-opt vcard" data-i="'+i+'"><canvas data-k="'+k+'"></canvas><span class="vicon">'+GINFO[k].icon+"</span><b>"+GINFO[k].name+"</b><small>"+GINFO[k].sub+"</small>"+VBAR+"</button>").join("");
     $("vote-random").classList.remove("hl");
@@ -1947,14 +1951,22 @@
       el.classList.toggle("mine", mine === i);
       const voters = room.players.filter((p) => V.votes[p.id] === i);
       el.querySelector(".vbar").innerHTML = room.players.map((_,k) => { const p = voters[k];
-        return p ? '<i title="'+esc(p.name)+'" style="background:'+PCOL[p.color]+';box-shadow:0 0 8px '+PCOL[p.color]+'"><span>'+MARKS[p.color]+"</span></i>" : "<i></i>"; }).join("");
+        return p ? '<i data-p="'+p.id+'" title="'+esc(p.name)+'" style="background:'+PCOL[p.color]+';box-shadow:0 0 8px '+PCOL[p.color]+'"><span>'+MARKS[p.color]+"</span></i>" : "<i></i>"; }).join("");
       el.querySelector(".vcnt").textContent = pct + "%";
     });
-    if(V.pick != null && !roll){ // 룰렛: 표를 받은 칸들 사이를 점점 느리게 돌다가 서버가 뽑은 칸에서 멈춘다
-      const cand = [0,1,2,3].filter((i) => total ? V.counts[i] : i < 3), m = cand.length, pi = cand.indexOf(V.pick), n = 16;
-      roll = {t0: performance.now()/1000, seq: [], at: [], k: -1};
-      for(let k=0, t=0; k<n; k++){ roll.seq.push(cand[((pi-(n-1-k))%m+m)%m]); roll.at.push(t); t += 0.06+0.4*Math.pow(k/n,3); }
+    if(V.pick != null && !roll){ // 표를 화면 순서(카드 1·2·3 → 무작위)대로 돌며 점점 느려지다가 뽑힌 표에서 멈춘다
+      const ids = [...document.querySelectorAll(".vbar i[data-p]")].map((el) => el.dataset.p), m = ids.length, pi = ids.indexOf(V.voter), n = 18;
+      roll = {t0: performance.now()/1000, seq: [], at: [], k: -1, done: false};
+      if(pi >= 0) for(let k=0, t=0; k<n; k++){ roll.seq.push(ids[((pi-(n-1-k))%m+m)%m]); roll.at.push(t); t += 0.05+0.42*Math.pow(k/n,3); }
     }
+    rollPaint();
+  }
+  function rollPaint(){ // 게이지를 다시 그려도(누가 들어오거나 나가도) 룰렛 불빛은 유지
+    if(!roll) return;
+    const id = roll.seq[roll.k];
+    document.querySelectorAll(".vbar i").forEach((el) => el.classList.toggle("hl", !!id && el.dataset.p === id));
+    document.querySelectorAll(".vote-opt").forEach((el) => el.classList.toggle("hl", roll.done && Number(el.dataset.i) === room.vote.pick));
+    $("vote-main").classList.toggle("done", roll.done);
   }
   $("screen-vote").addEventListener("click", (e) => {
     const el = e.target.closest(".vote-opt");
@@ -2032,14 +2044,19 @@
       const g = cv.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0);
       drawArt(g, cv.dataset.k, w, h, now);
     });
-    if(!roll) return;
+    if(!roll || roll.done) return;
     let k = roll.k;
     while(k+1 < roll.seq.length && now-roll.t0 >= roll.at[k+1]) k++;
-    if(k === roll.k) return;
-    roll.k = k;
-    document.querySelectorAll(".vote-opt").forEach((el) => el.classList.toggle("hl", Number(el.dataset.i) === roll.seq[k]));
-    if(k < roll.seq.length-1) return tone(1200,0.04,"square",0.06); // 딱딱딱…
-    $("vote-main").classList.add("done"); sfxWin();
+    const last = roll.seq.length-1;
+    if(k !== roll.k){ // 한 칸 이동: 삐빅 + 짚은 표가 톡 튄다 (같은 표를 연달아 짚어도 보이게 애니메이션을 다시 건다)
+      roll.k = k; rollPaint();
+      const el = document.querySelector('.vbar i[data-p="'+roll.seq[k]+'"]');
+      if(el){ el.classList.remove("blip"); void el.offsetWidth; el.classList.add("blip"); }
+      if(k < last) return tone(1200,0.04,"square",0.06);
+      return tone(1600,0.14,"square",0.08); // 멈춤
+    }
+    if(k < last || now-roll.t0 < (roll.at[last] || 0)+0.35) return; // 멈춘 표를 잠깐 보여준 뒤 카드에 촥
+    roll.done = true; rollPaint(); sfxWin();
     $("vote-sub").textContent = (V.pick === 3 ? "🎲 무작위 → " : "오늘의 도박은 ") + GINFO[V.game].icon + " " + GINFO[V.game].name + "!";
   }
 

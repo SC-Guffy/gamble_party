@@ -231,7 +231,7 @@ function createRoom(title, hostName) {
     days: DAYS, // 방장이 대기실에서 정하는 진행 일수
     game: null,
     cap: 0,
-    vote: null, // 게임 투표: { options: [게임 key 3개], votes: { playerId: 0~3 (3 = 무작위) }, until, pick, game }
+    vote: null, // 게임 투표: { options: [게임 key 3개], votes: { playerId: 0~3 (3 = 무작위) }, pick, voter(뽑힌 표의 주인), game }
     night: null, // 밤 정산표: { playerId: { delta, wage } }
     entrants: null,
     race: null,
@@ -259,7 +259,7 @@ function broadcastRoom(room) {
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
       dice: room.dice,
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults },
-      vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, game: room.vote.game },
+      vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, voter: room.vote.voter, game: room.vote.game },
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
         dealer: room.bj.hidden ? room.bj.dealer.map((c, i) => (i === 1 ? null : c)) : room.bj.dealer } },
   });
@@ -313,13 +313,13 @@ function checkVoteReady(room) {
   resolveVote(room);
 }
 
+// 표 한 장을 무작위로 뽑는다 = 칸별 확률이 득표에 비례. 누구 표인지(voter)도 내려서 클라이언트 룰렛이 그 마크에서 멈춘다.
 function resolveVote(room) {
-  const V = room.vote, weights = voteCounts(room); // 전원이 찍은 뒤에만 불리니 표가 최소 1장은 있다
-  let r = Math.random() * weights.reduce((a, b) => a + b, 0), pick = 0;
-  for (; pick < 3 && r >= weights[pick]; pick++) r -= weights[pick];
-  V.pick = pick;
+  const V = room.vote, voters = [...room.players.values()].filter((p) => p.id in V.votes); // 전원이 찍은 뒤에만 불리니 최소 1장
+  V.voter = voters[Math.floor(Math.random() * voters.length)].id;
+  V.pick = V.votes[V.voter];
   const pool = playable(room);
-  V.game = pick < 3 ? V.options[pick] : pool[Math.floor(Math.random() * pool.length)].key;
+  V.game = V.pick < 3 ? V.options[V.pick] : pool[Math.floor(Math.random() * pool.length)].key;
   broadcastRoom(room); // 결과는 클라이언트가 룰렛을 다 돌린 뒤에 보여준다 (채팅으로 미리 알리지 않음)
   room.timer = setTimeout(() => startDay(room, V.game), VOTE_REVEAL);
 }
@@ -942,7 +942,7 @@ if (process.argv.includes("--check")) {
   assert.deepStrictEqual(voteCounts(vr), [0, 0, 2, 0]);
   handleMessage(v2, { type: "vote", i: 0 }); // 추첨이 시작되면 못 바꾼다
   const voted = vr.vote.options[2];
-  assert(vr.vote.pick === 2 && vr.vote.game === voted);
+  assert(vr.vote.pick === 2 && vr.vote.game === voted && [v1.id, v2.id].includes(vr.vote.voter));
   clearTimeout(vr.timer);
   startDay(vr, voted);
   assert(vr.phase === "betting" && vr.day === 1 && vr.game === voted && !vr.vote);

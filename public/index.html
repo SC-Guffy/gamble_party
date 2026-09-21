@@ -321,6 +321,12 @@
   @media (max-width:719px){ .vcard small{display:none} .vicon{width:34px;height:34px;font-size:17px;margin-bottom:3px} .vbar{width:88%} #vote-random{gap:8px;padding-right:12px} #vote-random b{font-size:13px} }
 
   @media (prefers-reduced-motion: reduce){ .beg,#btn-beg,#screen-home h1.title span{animation:none} button.btn{transition:none} }
+  /* ---------- 탄광 미니게임 ---------- */
+  #mn-canvas{width:100%;height:160px;display:block;border-radius:14px;border:2px solid #4a3d1a;background:#1a120c;touch-action:manipulation;cursor:pointer}
+  #mn-btn{font-family:var(--font-display);font-size:16px;line-height:1.5;color:#161320;background:var(--gold);border:none;border-radius:16px;padding:16px 10px;cursor:pointer;box-shadow:0 6px 0 var(--gold-shade);touch-action:manipulation;-webkit-user-select:none;user-select:none}
+  #mn-btn small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
+  #mn-btn:disabled{background:var(--good);box-shadow:0 6px 0 #4a9a5c;cursor:default}
+  .mn-earn{color:var(--gold);margin-left:-4px}
 </style>
 </head>
 <body>
@@ -374,6 +380,7 @@
     <div id="hud"><span id="hud-round"></span><div id="hud-players" style="display:flex;gap:6px"></div></div>
     <div id="track-wrap"><canvas id="canvas"></canvas><div id="overlay"></div></div>
     <div id="panel">
+      <div id="mn-panel" hidden><canvas id="mn-canvas" aria-label="탄광 채굴 화면"></canvas><button id="mn-btn">⛏️ 캐기!<small>연타! (스페이스)</small></button></div>
       <div id="panel-bet">
         <div id="cards"></div>
         <div id="dice-board" hidden></div>
@@ -939,6 +946,8 @@
     } else if(msg.type === "toast"){
       toast(msg.text);
       if(msg.coin) sfxCoin();
+    } else if(msg.type === "mnHit"){
+      mnOnHit(msg);
     } else if(msg.type === "error"){
       toast(msg.message, true);
     }
@@ -1030,6 +1039,7 @@
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
     lnRender(); // 사채: HUD·정산표 빚 표시 + 패널
+    mnRender(); // 탄광 미니게임 패널 (게임 종류와 상관없이 #panel 맨 위)
   }
 
   // ---------- 채팅 ----------
@@ -3453,6 +3463,134 @@
     $("vote-sub").textContent = (V.pick === 3 ? "🎲 무작위 → " : "오늘의 도박은 ") + GINFO[V.game].icon + " " + GINFO[V.game].name + "!";
   }
 
+  // ---------- 탄광 미니게임 ----------
+  // 탄광에 간 날엔 #panel 맨 위 #mn-panel에서 곡괭이질(버튼·캔버스 탭·스페이스)로 바위를 깬다. 위 메인 캔버스는 그대로 그날 게임 관전.
+  // 곡괭이 모션·소리는 누르는 즉시, 바위 HP·전리품·금액은 서버 응답(mnHit / room) 기준.
+  const MN_BASE = 100, MN_MAX = 1000; // 서버 WAGE / MN_MAX와 같아야 함
+  const MN_KIND = {stone:"#b3a899", silver:"#e3ebf2", gold:"#ffd447", dia:"#7fe9ff"}; // 전리품 색
+  const MN_ROCK = ["#8a7f72","#6f6a66","#5d5870","#4a3f5c"]; // 깊어질수록(바위 6개마다) 어둡고 단단해 보이게
+  const mnCv = $("mn-canvas"), mnBtn = $("mn-btn");
+  // 보이는 바위 {n, hp, max} / 파티클 / 바위 위치(파티클 기준점) / 마지막 곡괭이질(초) / 마지막 연타(ms) / 새 바위 등장(초) / 카운터 표시값
+  let mnRockV = {n:0, hp:1, max:1}, mnParts = [], mnGeo = null, mnSwing = -9, mnLast = 0, mnBorn = -9, mnShown = 0;
+  function mnRender(){
+    const my = me();
+    $("mn-panel").hidden = !my.mining;
+    room.players.forEach((p, i) => { const chip = $("hud-players").children[i]; if(p.mining && chip) chip.insertAdjacentHTML("beforeend", '<span class="mn-earn">$'+(p.mnEarn||0)+"</span>"); }); // HUD 칩: ⛏️$340
+    for(const id of ["bet-hint","night-note"]) $(id).textContent = $(id).textContent.replace("밤에 일당 $200", "캔 만큼 밤에 일당 $"+MN_BASE+"~"+MN_MAX); // 게임별 안내 문구에 남은 옛 고정 일당
+    if(room.phase === "night") ranked().forEach((p, i) => { // 정산표 "⛏️ 탄광 일당" 태그에 금액 (+ 다이아 캤으면 💎). 행 순서 = renderNight의 ranked()
+      const n = room.night[p.id], row = $("night-rows").children[i], tag = row && row.querySelector(".tag.mine");
+      if(n && n.wage && tag) tag.textContent = "⛏️ 탄광 일당 $"+n.wage+(n.mnDia ? " 💎" : "");
+    });
+    if(!my.mining) return;
+    mnRockV = my.mnRock || {n:0, hp:1, max:1};
+    const full = (my.mnEarn||0) >= MN_MAX-MN_BASE;
+    mnBtn.disabled = full;
+    mnBtn.innerHTML = full ? "🎉 오늘 할당량 끝!<small>밤에 일당 $"+MN_MAX+" 받아요</small>" : "⛏️ 캐기!<small>연타! (스페이스) · 깊이 팔수록 비싼 광석</small>";
+  }
+  function mnEmit(o){ if(mnParts.length > 300) return; const p = Object.assign({vx:0, vy:0, g:0, life:0.6, rot:0, spin:0, w:4, color:"#fff"}, o); p.maxLife = p.life; p.h = p.h || p.w; mnParts.push(p); }
+  function mnDig(){
+    const now = performance.now(), G = mnGeo;
+    if(!room || $("mn-panel").hidden || mnBtn.disabled || now-mnLast < 130) return; // 서버 제한(초당 8번)보다 살짝 느리게
+    mnLast = now; mnSwing = now/1000;
+    sendMsg({type:"mnHit"});
+    if(actx) drum(actx.currentTime, 0.05, 0.12, 2400);
+    tone(170,0.07,"square",0.05,90); // 깡!
+    if(mnBtn.animate) mnBtn.animate([{transform:"translateY(4px)"},{transform:"none"}], 110);
+    if(G) for(let k=0;k<5;k++) mnEmit({x:G.rx+2*G.u, y:G.gy-(16+R()*3)*G.u, vx:-40-R()*120, vy:-60-R()*120, g:500, life:0.35+R()*0.2, w:G.u*(0.5+R()*0.7), color:k%2 ? "#d9d0c2" : G.col, spin:10}); // 돌 부스러기
+  }
+  function mnOnHit(msg){
+    mnRockV = msg.rock;
+    if(!msg.loot) return;
+    const L = msg.loot, dia = L.k === "dia", col = MN_KIND[L.k], G = mnGeo;
+    mnBorn = performance.now()/1000;
+    if(actx) drum(actx.currentTime, 0.25, 0.14, 400);
+    tone(110,0.22,"sawtooth",0.08,50); // 와르르
+    if(dia){ sfxWin(); sfxSparkle(); confetti(60); } else if(L.k === "gold") sfxCoin(); else if(L.k === "silver") sfxChip(); else tone(880,0.06,"triangle",0.08);
+    if(!G) return;
+    const cx = G.rx+8*G.u, cy = G.gy-9*G.u;
+    for(let k=0;k<16;k++) mnEmit({x:cx+(R()-0.5)*14*G.u, y:cy+(R()-0.5)*16*G.u, vx:(R()-0.5)*300, vy:-60-R()*220, g:700, life:0.6+R()*0.4, w:G.u*(1+R()*2), color:shade(G.col, [0.8,1,1.2][k%3]), spin:(R()-0.5)*16}); // 파편
+    mnEmit({x:cx, y:cy, vx:-30+R()*60, vy:-240, g:520, life:1.1, w:G.u*(dia ? 3.4 : 2.4), color:col, gem:1, spin:7}); // 튀어나온 광석
+    mnEmit({x:cx, y:cy-8*G.u, vy:-36, life:1.4, w:dia ? 26 : 18, txt:(dia ? "💎 " : "")+"+$"+L.v, color:col});
+    if(dia || L.k === "gold") for(let k=0;k<(dia ? 18 : 7);k++){ const a = R()*T, sp = 80+R()*140; mnEmit({x:cx, y:cy, vx:Math.cos(a)*sp, vy:Math.sin(a)*sp-60, g:160, life:0.9, w:3+R()*3, star:1, color:R() < 0.5 ? "#fff" : col, spin:6}); }
+  }
+  function mnDraw(now, dt){
+    const w = mnCv.clientWidth, h = mnCv.clientHeight, dpr = Math.max(1, window.devicePixelRatio||1);
+    if(!w) return;
+    if(mnCv.width !== Math.round(w*dpr) || mnCv.height !== Math.round(h*dpr)){ mnCv.width = Math.round(w*dpr); mnCv.height = Math.round(h*dpr); }
+    const g = mnCv.getContext("2d"), my = me(), earn = my.mnEarn || 0, full = earn >= MN_MAX-MN_BASE, Rk = mnRockV;
+    const gy = h-12, u = clamp((gy-46)/22, 2.5, 6), cx = w/2-10*u, rx = cx+5*u, col = MN_ROCK[Math.min(3, Math.floor(Rk.n/6))];
+    g.setTransform(dpr,0,0,dpr,0,0);
+    mnGeo = {rx:rx, gy:gy, u:u, col:col};
+    // 동굴 벽(줄눈 사이 돌덩이) + 바닥 자갈 + 버팀목
+    g.fillStyle = "#140d08"; g.fillRect(0,0,w,h);
+    for(let r=0, y=0; y<gy; r++, y+=18) for(let x=-(r%2)*14, c=0; x<w; x+=28, c++){
+      const stone = ["#3a2a1e","#33251a","#41301f","#2d2016"][(r*7+c*3)%4];
+      g.fillStyle = stone; g.fillRect(x+1, y+1, 26, 16); g.fillStyle = shade(stone,1.25); g.fillRect(x+1, y+1, 26, 2);
+    }
+    g.fillStyle = "#24170f"; g.fillRect(0, gy, w, h-gy);
+    g.fillStyle = "#3a2a1e"; for(let x=5; x<w; x+=17) g.fillRect(x, gy+3+(x*7)%6, 3, 2);
+    for(const bx of [w*0.05, w*0.95-10]){ g.fillStyle = "#6b4424"; g.fillRect(bx, 0, 10, gy); g.fillStyle = "#8a5a30"; g.fillRect(bx, 0, 3, gy); }
+    // 가장자리는 캄캄, 기둥의 랜턴과 바위 쪽만 밝게
+    const vg = g.createRadialGradient(rx, gy-10*u, 10*u, rx, gy-10*u, Math.max(w*0.6, 220)); vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(0,0,0,.6)");
+    g.fillStyle = vg; g.fillRect(0,0,w,h);
+    const lx = w*0.05+22, ly = 62, fl = 0.85+0.15*S(now*9)*S(now*5.3);
+    g.globalCompositeOperation = "lighter";
+    for(const [ox, oy, gr, a] of [[lx, ly, 110, 0.3*fl], [rx+4*u, gy-12*u, 18*u, 0.12]]){
+      const lg = g.createRadialGradient(ox, oy, 0, ox, oy, gr); lg.addColorStop(0,"rgba(255,190,90,"+a.toFixed(3)+")"); lg.addColorStop(1,"rgba(255,190,90,0)");
+      g.fillStyle = lg; g.fillRect(ox-gr, oy-gr, gr*2, gr*2);
+    }
+    g.globalCompositeOperation = "source-over";
+    g.fillStyle = "#1b1420"; g.fillRect(lx-12, ly-12, 12, 2); g.fillRect(lx-1, ly-12, 2, 4); g.fillRect(lx-5, ly-8, 10, 3); g.fillRect(lx-5, ly+3, 10, 2);
+    g.fillStyle = "#ffd27a"; g.fillRect(lx-4, ly-5, 8, 8);
+    // 바위: 새 바위는 쑥 솟아나고, 맞으면 흔들리고, HP가 줄수록 금이 간다 (금 모양은 바위 번호로 고정)
+    const grow = clamp((now-mnBorn)/0.25, 0, 1), sc = 0.5+0.5*grow*(2-grow), shake = now-mnSwing < 0.12 ? (R()-0.5)*3 : 0, dmg = 1-Rk.hp/Rk.max;
+    const rn = (k) => { const x = S(k*127.1+Rk.n*311.7)*43758.5453; return x-Math.floor(x); };
+    g.save(); g.translate(rx+8*u+shake, gy); g.scale(u*sc, u*sc); g.translate(-8, 0);
+    drawBox(g,0,0,0,16,10,5,col); drawBox(g,1,10,0.5,14,6,4,shade(col,1.06)); drawBox(g,3,16,1,10,4,3,col);
+    g.strokeStyle = "#1b1420"; g.lineWidth = 0.45; g.lineJoin = "round"; g.beginPath();
+    for(let k=0;k<Math.ceil(dmg*7);k++){
+      let x = 3+rn(k)*10, y = 1+rn(k+0.37)*13; g.moveTo(x, -y);
+      for(let j=0;j<3;j++){ x = clamp(x+(rn(k*3+j+0.71)-0.5)*5, 1.5, 14.5); y = clamp(y+(rn(k*3+j+0.13)-0.5)*5, 0.5, 15); g.lineTo(x, -y); }
+    }
+    g.stroke(); g.restore();
+    if(dmg > 0){ const by = gy-22.5*u; g.fillStyle = "rgba(11,10,19,.75)"; g.fillRect(rx, by, 16*u, 5); g.fillStyle = dmg > 0.66 ? "#ff5d72" : dmg > 0.33 ? "#ffb84d" : "#7bd88f"; g.fillRect(rx+1, by+1, (16*u-2)*(1-dmg), 3); }
+    // 광부 = 나. 곡괭이를 치켜든 채 대기 → 누르면 내리찍고 다시 치켜든다 (drawPerson "mine" 포즈의 흔들기 시계를 직접 돌린다)
+    const f = (now-mnSwing)/0.16, ph = f < 0 || f >= 1 ? -PI/2+0.12*S(now*2.2) : f < 0.3 ? -PI/2+PI*f/0.3 : PI/2-PI*(f-0.3)/0.7;
+    drawPerson(g, my.look, cx, gy, u, "mine", ph/6, 0);
+    // 파티클 (메인 캔버스 stepParticles와 같은 모양, 화면 좌표만)
+    for(let k=mnParts.length-1;k>=0;k--){
+      const p = mnParts[k];
+      p.x += p.vx*dt; p.y += p.vy*dt; p.vy += p.g*dt; p.rot += p.spin*dt; p.life -= dt;
+      if(p.life <= 0){ mnParts.splice(k,1); continue; }
+      g.globalAlpha = clamp(p.life/p.maxLife*2, 0, 1); g.fillStyle = p.color;
+      g.save(); g.translate(p.x, p.y); g.rotate(p.txt ? 0 : p.rot);
+      if(p.txt){ g.font = "800 "+p.w+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 4; g.strokeStyle = "#161320"; g.strokeText(p.txt,0,0); g.fillText(p.txt,0,0); }
+      else if(p.star) starPath(g, p.w);
+      else { g.fillRect(-p.w/2,-p.h/2,p.w,p.h); if(p.gem){ g.fillStyle = "rgba(255,255,255,.75)"; g.fillRect(-p.w/2+1,-p.h/2+1,p.w*0.35,p.h*0.35); } }
+      g.restore();
+    }
+    g.globalAlpha = 1;
+    // HUD: 오늘 캔 돈(카운트) + 일당 게이지(기본 + 캔 돈, 최대 MN_MAX) + 깊이
+    mnShown = earn < mnShown ? earn : mnShown+(earn-mnShown)*Math.min(1, dt*8);
+    const shown = Math.round(mnShown), pay = MN_BASE+shown, txt = "⛏️ 오늘 +$"+shown;
+    g.font = "800 15px Rubik, sans-serif";
+    const pw = g.measureText(txt).width+16.5, gx = pw+18, gw = w-10-gx;
+    pill(g, 8+pw/2, 18, txt, "rgba(11,10,19,.8)", "#ffdd7a", 15);
+    g.fillStyle = "rgba(11,10,19,.8)"; rr(g, gx, 10, gw, 16, 8); g.fill();
+    g.fillStyle = full ? "#7bd88f" : "#e8ac3a"; rr(g, gx+2, 12, Math.max(12, (gw-4)*pay/MN_MAX), 12, 6); g.fill();
+    g.font = "700 11px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 3; g.strokeStyle = "#161320"; g.fillStyle = "#fff";
+    g.strokeText("일당 $"+pay+" / $"+MN_MAX, gx+gw/2, 18.5); g.fillText("일당 $"+pay+" / $"+MN_MAX, gx+gw/2, 18.5);
+    g.font = "700 10px Rubik, sans-serif"; g.textAlign = "left"; g.fillStyle = "rgba(255,255,255,.55)"; g.fillText("지하 "+(10+Rk.n*3)+"m · "+(Rk.n+1)+"번째 바위", 8, h-5.5);
+    if(full) pill(g, w/2, 46, "🎉 오늘 일당 최대치! 쉬어도 돼요", "#7bd88f", "#161320", 12);
+  }
+  mnBtn.addEventListener("pointerdown", (e) => { e.preventDefault(); mnDig(); });
+  mnCv.addEventListener("pointerdown", (e) => { e.preventDefault(); mnDig(); });
+  window.addEventListener("keydown", (e) => { // 스페이스 연타 = 캐기 (채팅 입력 중엔 무시, 꾹 누른 자동 반복은 안 쳐준다)
+    if(e.key !== " " || $("mn-panel").hidden || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    e.preventDefault();
+    if(!e.repeat) mnDig();
+  });
+
   let lastTs = null, lastRows = 0;
   function loop(ts){
     requestAnimationFrame(loop);
@@ -3461,6 +3599,7 @@
     if(!screens.vote.hidden) return room && room.vote && drawVote(ts/1000);
     if(screens.game.hidden){ if(BW){ drawHome(ts/1000, dt); if(room && room.phase === "lobby") drawLobbyPeople(ts/1000); } return; }
     if(!room || !W) return;
+    if(!$("mn-panel").hidden) mnDraw(ts/1000, dt);
     if(room.phase === "night" || room.phase === "final"){
       if(chartAnim){ // 그래프가 0일차부터 자라난다
         const days = Math.max(1, room.day), fin = room.phase === "final", pr = chartProgress(days, fin);

@@ -51,7 +51,7 @@ const START_MONEY = Number(process.env.START_MONEY) || 1000; // 테스트할 땐
 const ALMS = 100; // 한푼줍쇼 한 번에 건네는 돈
 const DAYS = Number(process.env.DAYS) || 7; // 새 방의 기본 진행 일수. 방장이 대기실에서 바꾼다 (1~MAX_DAYS)
 const MAX_DAYS = 30;
-const WAGE = 200; // 아오지 탄광 일당
+const WAGE = 100; // 아오지 탄광 기본 일당 (+ 그날 캔 돈, 합계 최대 MN_MAX → 탄광 미니게임)
 // 도박 컨텐츠 목록. cap(day) = 그날 한 사람이 걸 수 있는 총액 상한(올인 즉사 방지, 날이 갈수록 판이 커진다).
 // 새 게임을 추가할 땐 여기에 등록하고 startDay에서 key별로 분기하면 된다. (투표 카드용으로 클라이언트 GINFO/drawArt에도)
 // min = 최소 인원(없으면 1). 방 인원이 모자라면 투표 카드/무작위 후보에서 빠진다.
@@ -1200,13 +1200,15 @@ function startNight(room) {
   room.night = {};
   sys(room, "🌙 DAY " + room.day + " 밤 — 정산 시간");
   for (const p of room.players.values()) {
-    const wage = p.mining ? WAGE : 0;
+    const wage = p.mining ? WAGE + (p.mnEarn || 0) : 0; // 탄광 일당 = 기본 + 오늘 캔 돈 (한도는 캘 때 이미 잘라 둠)
     p.money += wage;
     p.mining = false;
     p.ready = false;
     p.history[room.day] = p.money;
     room.night[p.id] = { delta: p.money - p.dayStart, wage };
     lnNightly(room, p); // 사채 이자 + 그래프는 순자산으로
+    if (wage) room.night[p.id].mnDia = p.mnDia || 0; // 탄광에서 다이아를 캤으면 정산표에 💎
+    Object.assign(p, { mnEarn: 0, mnDia: 0, mnRock: null }); // 오늘 채굴 기록은 일당으로 바꿨으니 초기화
     if (wage) sys(room, "⛏️ " + p.name + " 탄광 일당 +$" + wage);
     if (p.money === 0) sys(room, "💸 " + p.name + " 파산! 한푼줍쇼는 딱 한 번…");
   }
@@ -1266,6 +1268,50 @@ function lnAct(room, me, a) {
   } else return;
   broadcastRoom(room); // 순자산은 그대로라 그래프(history)는 안 바뀐다
   checkNightReady(room); // 파산자가 다 갚고 다시 $0이 된 경우(구걸해 봤으면 자동 준비)
+}
+
+// ---------- 탄광 미니게임 ----------
+// 탄광에 간 날(p.mining)은 낮 내내(밤 정산 전까지) 곡괭이질(mnHit)로 바위를 깬다. 밤 일당 = WAGE + p.mnEarn(오늘 캔 돈), 합계 최대 MN_MAX.
+// 바위는 깰수록(p.mnRock.n = 오늘 깬 개수 = 깊이) HP가 1씩 늘고 전리품 값이 10%씩 오른다.
+// 숫자는 시뮬레이션으로 맞춘 값: 초당 6번 × 1분 = 중앙값 $330 (평균 $415), 2~2.5분이면 한도 근처, 1분 안에 다이아가 나올 확률 ~16%.
+// 연타가 많으니 타격 결과는 친 사람에게만 보내고, 방 전체 broadcastRoom은 바위가 깨질 때만(HUD의 ⛏️$ 갱신용).
+const MN_MAX = 1000;
+const MN_RATE = 8; // 초당 타격 상한. 넘는 건 매크로로 보고 버린다
+const MN_LOOT = [ // [종류, 확률, 최소$, 최대$] — 깊이 n이면 값 × (1 + 0.1n)
+  ["stone", 0.7, 3, 8],
+  ["silver", 0.22, 10, 20],
+  ["gold", 0.07, 35, 60],
+  ["dia", 0.01, 400, 600],
+];
+const mnRock = (n) => ({ n, hp: 12 + n, max: 12 + n });
+
+function mnLoot(n) {
+  let r = Math.random(), i = 0;
+  while (i < MN_LOOT.length - 1 && r >= MN_LOOT[i][1]) r -= MN_LOOT[i++][1];
+  const [k, , lo, hi] = MN_LOOT[i];
+  return { k, v: Math.round((lo + Math.random() * (hi - lo)) * (1 + 0.1 * n)) };
+}
+
+function mnHit(ws, room, me) {
+  if (!me.mining || ["lobby", "vote", "night", "final"].includes(room.phase)) return; // 탄광 가는 날 낮에만
+  const now = Date.now(), left = MN_MAX - WAGE - (me.mnEarn || 0);
+  ws.mnHits = (ws.mnHits || []).filter((t) => now - t < 1000); // 최근 1초 동안의 타격 시각
+  if (ws.mnHits.length >= MN_RATE || left <= 0) return; // 너무 빠르거나 한도를 다 채웠으면 무시
+  ws.mnHits.push(now);
+  const rock = (me.mnRock = me.mnRock || mnRock(0));
+  if (--rock.hp > 0) return send(ws, { type: "mnHit", rock });
+  const loot = mnLoot(rock.n);
+  loot.v = Math.min(loot.v, left);
+  me.mnEarn = (me.mnEarn || 0) + loot.v;
+  me.mnRock = mnRock(rock.n + 1);
+  if (loot.k === "dia") {
+    me.mnDia = (me.mnDia || 0) + 1;
+    const text = "💎 " + me.name + " 다이아 발견! +$" + loot.v;
+    sys(room, text);
+    broadcast(room, { type: "toast", text, coin: true });
+  }
+  send(ws, { type: "mnHit", rock: me.mnRock, loot });
+  broadcastRoom(room);
 }
 
 function pickLook(room) {
@@ -1442,6 +1488,8 @@ function handleMessage(ws, msg) {
     broadcastRoom(room);
   } else if (msg.type === "lnAct") {
     lnAct(room, me, msg.a);
+  } else if (msg.type === "mnHit") {
+    mnHit(ws, room, me);
   } else if (msg.type === "leave") {
     rcLeave(ws, room, me);
     leaveRoom(ws);
@@ -2272,6 +2320,52 @@ if (process.argv.includes("--check")) {
   assert(L1.lnDebt === 0 && L1.money === START_MONEY, "새 게임이면 빚 탕감");
   delete process.env.GAME;
   }
+  // 탄광 미니게임: 파산 → 구걸 실패 → 탄광 → 곡괭이질(초당 8번까지, 친 사람에게만 응답) → 바위 파괴·전리품 → 밤 일당 = 기본 + 캔 돈 (최대 $1000) → 다음 날엔 못 캠
+  const mf = () => ({ id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, got: [], send(d) { this.got.push(JSON.parse(d)); } });
+  const m1 = mf(), m2 = mf(), hit = (n = 1) => { for (let i = 0; i < n; i++) handleMessage(m1, { type: "mnHit" }); };
+  handleMessage(m1, { type: "create", name: "M1" });
+  handleMessage(m2, { type: "join", id: m1.room.code, name: "M2" });
+  process.env.GAME = "dice";
+  handleMessage(m1, { type: "start" });
+  const mr = m1.room, M1 = mr.players.get(m1), M2 = mr.players.get(m2);
+  hit();
+  assert(!M1.mnRock, "탄광 아닌 사람의 곡괭이질은 무시");
+  M1.money = M2.money = 0;
+  clearTimeout(mr.timer); startNight(mr);
+  hit();
+  assert(!M1.mnRock, "밤엔 못 캔다");
+  handleMessage(m1, { type: "beg", v: true });
+  handleMessage(m2, { type: "beg", v: true }); // 둘 다 구걸만 하고 아무도 안 줌 → 둘 다 탄광행 (전원 탄광이라 바로 굴린다)
+  clearTimeout(mr.timer);
+  assert(M1.mining && M2.mining && mr.day === 2 && mr.phase === "rolling");
+  const seen = m2.got.length;
+  hit(9);
+  assert(M1.mnRock.n === 0 && M1.mnRock.hp === 12 - 8, "초당 8번까지만");
+  assert(m2.got.length === seen && m1.got.filter((m) => m.type === "mnHit").length === 8, "안 깨지는 타격은 친 사람에게만");
+  m1.mnHits = []; // 1초 지난 셈
+  Math.random = () => 0; // 전리품 = 돌, 최솟값
+  hit(4);
+  assert(M1.mnEarn === 3 && M1.mnRock.n === 1 && M1.mnRock.hp === 13, "12번째 타격에 첫 바위가 깨지고 돌 $3");
+  assert.deepStrictEqual(m1.got.filter((m) => m.type === "mnHit").pop().loot, { k: "stone", v: 3 });
+  assert(m2.got.slice(seen).some((m) => m.type === "room" && m.room.players.find((p) => p.id === M1.id).mnEarn === 3), "바위가 깨지면 모두에게 방송");
+  M1.mnRock = mnRock(10); M1.mnRock.hp = 1; m1.mnHits = [];
+  Math.random = () => 0.999; // 다이아 최댓값: (400 + 0.999 × 200) × 2 = $1200 → 한도($900 - $3)까지만
+  hit();
+  assert(M1.mnEarn === MN_MAX - WAGE && M1.mnDia === 1);
+  assert(m2.got.some((m) => m.type === "toast" && m.text === "💎 M1 다이아 발견! +$897") && m2.got.some((m) => m.sys && m.text.startsWith("💎 M1")));
+  m1.mnHits = []; hit();
+  assert(M1.mnRock.hp === M1.mnRock.max, "한도를 채우면 더 못 캔다");
+  Math.random = realRandom;
+  clearTimeout(mr.timer); startNight(mr);
+  assert(M1.money === 1000 && M2.money === 100, "캔 사람은 한도 $1000, 안 캔 사람은 기본 $100");
+  assert(mr.night[M1.id].wage === 1000 && mr.night[M1.id].mnDia === 1 && mr.night[M2.id].wage === 100 && !mr.night[M2.id].mnDia);
+  assert(M1.mnEarn === 0 && !M1.mnRock && !M1.mining, "밤에 일당으로 바꾸면 초기화");
+  handleMessage(m1, { type: "ready", v: true });
+  handleMessage(m2, { type: "ready", v: true });
+  m1.mnHits = []; hit();
+  assert(mr.day === 3 && mr.phase === "betting" && !M1.mnRock, "탄광이 끝난 다음 날엔 못 캔다");
+  delete process.env.GAME;
+  rooms.delete(mr.code);
   console.log("OK");
   process.exit(0);
 }

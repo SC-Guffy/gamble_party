@@ -151,6 +151,19 @@
   .pchip img,.row img{width:16px;height:22px;flex:none;image-rendering:pixelated}
   .tag{font-size:11px;font-weight:800;border-radius:6px;padding:2px 6px;background:var(--panel-edge);color:var(--ink-dim);white-space:nowrap}
   .tag.bad{background:#5a2330;color:#ffb3bf} .tag.mine{background:#4a3d1a;color:var(--gold)}
+  #dice-board{display:flex;flex-direction:column;gap:6px}
+  .dice-row{display:grid;gap:6px}
+  .dice-row.r2{grid-template-columns:1fr 1fr} .dice-row.r3{grid-template-columns:1fr 1fr 1fr} .dice-row.sums{grid-template-columns:repeat(11,1fr)}
+  @media (max-width:719px){ .dice-row.sums{grid-template-columns:repeat(6,1fr)} }
+  .spot{background:var(--panel);border:2px solid var(--panel-edge);border-radius:12px;padding:7px 3px 6px;display:flex;flex-direction:column;align-items:center;gap:1px;cursor:pointer;min-width:0;transition:transform .08s ease,border-color .12s ease}
+  .spot:active{transform:scale(.97)}
+  .spot b{font-size:17px;line-height:1.2} .spot small{font-size:10.5px;color:var(--ink-dim)}
+  .spot .odds{font-family:var(--font-display);font-size:10px;color:var(--gold);margin-top:2px}
+  .spot .mybet{font-size:11.5px;font-weight:800;color:var(--good);min-height:1.2em}
+  .spot.sel{border-color:var(--gold);background:#2b2844}
+  .spot.hit{border-color:var(--good);background:#1f4a35;animation:spot-pop .5s ease}
+  .spot.miss{opacity:.38}
+  @keyframes spot-pop{0%{transform:scale(1)}40%{transform:scale(1.08)}100%{transform:scale(1)}}
   #bj-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   #bj-actions button{font-family:var(--font-display);font-size:13px;border:none;border-radius:16px;padding:18px 6px;cursor:pointer;color:#161320;line-height:1.5}
   #bj-actions button small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.75}
@@ -212,6 +225,7 @@
     <div id="panel">
       <div id="panel-bet">
         <div id="cards"></div>
+        <div id="dice-board" hidden></div>
         <div id="bet-actions">
         <div id="bet-hint"></div>
         <div id="chips">
@@ -570,7 +584,7 @@
   let bgmStep = 0, bgmNext = 0;
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
-    const hot = room && (room.phase === "racing" || room.phase === "countdown" || room.phase === "playing"), spb = 60/(hot ? 176 : 138)/4;
+    const hot = room && (room.phase === "racing" || room.phase === "countdown" || room.phase === "playing" || room.phase === "rolling"), spb = 60/(hot ? 176 : 138)/4;
     if(bgmNext < actx.currentTime) bgmNext = actx.currentTime+0.05; // 처음이거나 탭이 숨겨졌다 돌아온 경우
     while(bgmNext < actx.currentTime+0.3){
       const bar = Math.floor(bgmStep/16)%8, st = bgmStep%16, beat = st>>2, sub = st&3, t = bgmNext;
@@ -686,23 +700,29 @@
     if(screens.game.hidden){ show("game"); resizeCanvas(); }
     const dark = r.phase === "night" || r.phase === "final";
     if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
-    const bj = r.game === "blackjack";
+    const bj = r.game === "blackjack", dice = r.game === "dice";
+    if(r.phase === "rolling" && prev !== "rolling"){ rollStart = performance.now()/1000; rollLanded = false; diceSnap = {}; r.players.forEach((p) => { diceSnap[p.id] = p.bets; }); }
     if(r.phase === "betting" && prev !== "betting"){ // 새 라운드: 출발선에 다시 세운다 / 새 판: 테이블을 비운다
       race = null; selected = -1; particles = []; cam = -130; fxPrev = []; posPrev = []; fxAcc = [];
       cardSeen = {}; bjPrev = {}; lastDeal = 0; revealAt = 0;
       setOverlay("");
       if(r.entrants){ clocks = r.entrants.map(() => Math.random()); buildCards(); }
+      if(dice){ diceSnap = {}; buildDiceBoard(); }
     }
+    if(dice && !$("dice-board").children.length) buildDiceBoard(); // 도중 입장
     if(r.entrants && clocks.length !== r.entrants.length) clocks = r.entrants.map(() => Math.random());
-    $("panel-bet").hidden = !(r.phase === "betting" || r.phase === "countdown");
+    // 주사위는 굴리는 중/결과 때도 베팅판을 그대로 보여준다(어디가 맞았는지 불이 들어온다). 칩·준비 버튼만 숨김
+    $("panel-bet").hidden = !(r.phase === "betting" || r.phase === "countdown" || (dice && (r.phase === "rolling" || r.phase === "result")));
+    $("bet-actions").hidden = dice && r.phase !== "betting";
+    $("dice-board").hidden = !dice;
     $("panel-race").hidden = r.phase !== "racing";
-    $("cards").hidden = bj;
+    $("cards").hidden = bj || dice;
     $("panel-bj").hidden = r.phase !== "playing";
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
     renderHud(); renderBegBar();
-    if(!dark && bj) renderBj(); else if(!dark && r.entrants) renderBet();
+    if(!dark && bj) renderBj(); else if(!dark && dice) renderDice(); else if(!dark && r.entrants) renderBet();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
     if(r.phase === "result" && prev !== "result") renderResult();
@@ -759,7 +779,7 @@
     $("lobby-players").innerHTML = html;
   }
   function renderHud(){
-    $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : " 경마");
+    $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : " 경마");
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -791,6 +811,44 @@
       selected < 0 ? "동물을 고른 뒤 칩을 눌러 베팅하세요." + capTxt :
       INFO[room.entrants[selected].key].name + " · 적중하면 x" + room.entrants[selected].odds.toFixed(1) + capTxt;
   }
+
+  // 주사위: 베팅 칸 인덱스는 서버 DICE_BETS 순서와 같아야 한다 (0 홀, 1 짝, 2 다운, 3 업, 4 더블, 5~15 = 합 2~12)
+  const DICE_LABELS = [["홀","합이 홀수"],["짝","합이 짝수"],["다운","합 2~6"],["업","합 8~12"],["더블","두 눈이 같음"]]
+    .concat([2,3,4,5,6,7,8,9,10,11,12].map((n) => [String(n), n === 7 ? "세븐" : ""]));
+  let diceSnap = {}, rollStart = 0, rollLanded = false; // diceSnap = 굴리기 직전의 베팅(정산되면 서버에선 지워지므로 결과 표시용으로 들고 있는다)
+  const diceBoard = $("dice-board");
+  function buildDiceBoard(){
+    const spot = (i) => '<button class="spot" data-i="'+i+'"><b>'+DICE_LABELS[i][0]+"</b>"+(DICE_LABELS[i][1] ? "<small>"+DICE_LABELS[i][1]+"</small>" : "")+'<span class="odds">x'+room.dice.odds[i].toFixed(1)+'</span><span class="mybet"></span><span class="dots"></span></button>';
+    diceBoard.innerHTML = '<div class="dice-row r2">'+spot(0)+spot(1)+'</div><div class="dice-row r3">'+spot(2)+spot(4)+spot(3)+'</div><div class="dice-row sums">'+[5,6,7,8,9,10,11,12,13,14,15].map(spot).join("")+"</div>";
+  }
+  function renderDice(){
+    const my = me(), D = room.dice, betting = room.phase === "betting", locked = !betting || my.ready || my.mining;
+    const hits = room.phase === "result" && room.result ? room.result.hits : null;
+    const betsOf = (p) => (betting ? p.bets : diceSnap[p.id] || p.bets); // 굴린 뒤에는 직전 베팅을 계속 보여준다
+    diceBoard.querySelectorAll(".spot").forEach((el) => {
+      const i = Number(el.dataset.i), mine = betsOf(my)[i];
+      el.classList.toggle("sel", betting && i === selected);
+      el.classList.toggle("hit", !!hits && hits.includes(i));
+      el.classList.toggle("miss", !!hits && !hits.includes(i));
+      el.querySelector(".mybet").textContent = mine ? "$"+mine : "";
+      el.querySelector(".dots").innerHTML = room.players.filter((p) => betsOf(p)[i]).map((p) => '<i style="background:'+PCOL[p.color]+'"></i>').join("");
+    });
+    document.querySelectorAll(".chip").forEach((c) => { c.disabled = locked; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : sum(my.bets) ? "굴려! (준비 완료)" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length, left = Math.max(0, Math.min(room.cap-sum(my.bets), my.money));
+    $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (밤에 일당 $200)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🎲 " + D.round + "/" + D.rounds + "번째 판 · " + (selected < 0 ? "칸을 고른 뒤 칩을 누르세요. 여러 칸에 나눠 걸어도 돼요." : DICE_LABELS[selected][0] + (selected > 4 ? " (합)" : "") + " · 적중하면 x" + D.odds[selected].toFixed(1)) +
+      " (판당 상한 $" + room.cap + " · 남은 한도 $" + left + ")";
+  }
+  diceBoard.addEventListener("click", (e) => {
+    const el = e.target.closest(".spot");
+    if(!el || room.phase !== "betting") return;
+    selected = Number(el.dataset.i);
+    renderDice();
+  });
 
   // 블랙잭: 베팅 단계는 경마와 같은 칩/준비 버튼을 쓰고(동물 카드만 숨김), 진행 단계는 HIT/STAND/DOUBLE
   function renderBj(){
@@ -824,7 +882,18 @@
   const BJ_OUT = {blackjack:"🃏 블랙잭!", win:"승", push:"푸시", lose:"패", bust:"버스트"};
   function renderResult(){
     const res = room.result, mine = res.payouts[myId];
-    $("result-next").textContent = room.bj && room.bj.hand < room.bj.hands ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    $("result-next").textContent = (room.bj && room.bj.hand < room.bj.hands) || (room.dice && room.dice.round < room.dice.rounds) ? "곧 다음 판 베팅이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+    if(room.dice){
+      const a = res.roll[0], b = res.roll[1], t = a+b;
+      $("result-title").textContent = "🎲 " + a + " + " + b + " = " + t + " · " + (t%2 ? "홀" : "짝") + " · " + (t === 7 ? "세븐! (업·다운 꽝)" : t > 7 ? "업" : "다운") + (a === b ? " · 더블!" : "");
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0;
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(mine.win > mine.bet*4 ? 160 : 60); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
     if(room.bj){
       $("result-title").textContent = res.dealer > 21 ? "💥 딜러 버스트! (" + res.dealer + ")" : "딜러 " + res.dealer;
       $("result-rows").innerHTML = room.players.map((p) => {
@@ -1014,9 +1083,9 @@
     if(!el || el.disabled) return;
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
-    if(!room.bj && selected < 0) return toast("먼저 동물을 골라주세요!", true);
+    if(!room.bj && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true);
     if(me().money <= 0) return toast("돈이 없어요…", true);
-    if(room.cap - sum(me().bets) <= 0) return toast((room.bj ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
+    if(room.cap - sum(me().bets) <= 0) return toast((room.bj || room.dice ? "이번 판" : "오늘") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
     sendMsg({type:"bet", i:room.bj ? 0 : selected, amount: el.dataset.amt === "all" ? room.cap : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
@@ -1379,6 +1448,86 @@
     });
   }
 
+  // ---------- 주사위 장면: 뒷골목 나무 상자 위의 주사위판 ----------
+  const PIPS = {1:[[0,0]], 2:[[-1,-1],[1,1]], 3:[[-1,-1],[0,0],[1,1]], 4:[[-1,-1],[1,-1],[-1,1],[1,1]], 5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]], 6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]]};
+  function drawDie(g, cx, cy, s, v, ang, red){ // 앞면 + 윗면 + 옆면(복셀 느낌), 앞면에만 눈
+    g.save(); g.translate(cx, cy); g.rotate(ang);
+    const o = s*0.22, body = red ? "#e8443a" : "#fdfcf7", pip = red ? "#fff" : "#1b1420";
+    g.fillStyle = shade(body,1.12); g.beginPath(); g.moveTo(-s/2,-s/2); g.lineTo(-s/2+o,-s/2-o); g.lineTo(s/2+o,-s/2-o); g.lineTo(s/2,-s/2); g.fill();
+    g.fillStyle = shade(body,0.78); g.beginPath(); g.moveTo(s/2,-s/2); g.lineTo(s/2+o,-s/2-o); g.lineTo(s/2+o,s/2-o); g.lineTo(s/2,s/2); g.fill();
+    g.fillStyle = body; rr(g,-s/2,-s/2,s,s,s*0.14); g.fill();
+    g.fillStyle = pip; for(const q of PIPS[v]){ g.beginPath(); g.arc(q[0]*s*0.27, q[1]*s*0.27, s*0.09, 0, T); g.fill(); }
+    g.restore();
+  }
+  function drawDice(ts, dt){
+    const g = ctx, now = ts/1000, D = room.dice, n = room.players.length, res = room.phase === "result" && room.result;
+    // 벽돌 담 + 전등
+    g.fillStyle = "#2a1f2e"; g.fillRect(0,0,W,H);
+    const bh = Math.max(14, H*0.055), bw = bh*2.4;
+    for(let r=0; r*bh < H*0.62; r++) for(let c=-1; c*bw < W; c++){ g.fillStyle = (r*7+c*3)%5 ? "#5a3340" : "#6b3c48"; g.fillRect(c*bw+(r%2)*bw/2+1, r*bh+1, bw-2, bh-2); }
+    const lamp = g.createRadialGradient(W/2, 0, 4, W/2, H*0.1, H*0.75); lamp.addColorStop(0,"rgba(255,221,122,"+(0.5+0.05*S(now*13))+")"); lamp.addColorStop(1,"rgba(255,221,122,0)");
+    g.fillStyle = lamp; g.fillRect(0,0,W,H);
+    g.fillStyle = "#1b1420"; g.fillRect(W/2-1.5, 0, 3, H*0.06); g.fillStyle = "#ffdd7a"; g.beginPath(); g.arc(W/2, H*0.075, H*0.025, 0, T); g.fill();
+    g.fillStyle = "#3a3340"; g.fillRect(0, H*0.62, W, H*0.38); // 바닥
+    g.fillStyle = "rgba(0,0,0,.18)"; for(let x=0; x<W; x+=bw*1.5) g.fillRect(x, H*0.62, 2, H*0.38);
+
+    // 나무 상자 + 초록 판
+    const s = clamp(H*0.19, 38, 92), tw = Math.min(W*0.62, s*6.2), tx = W/2-tw/2, tableY = H*0.5, th = H*0.2;
+    const shakeT = now-rollStart-2.6, quake = room.phase !== "betting" && shakeT > 0 && shakeT < 0.25 ? (R()-0.5)*7 : 0; // 착지 순간 덜컹
+    g.save(); g.translate(0, quake);
+    g.fillStyle = "#6b4424"; g.fillRect(tx, tableY, tw, th); g.fillStyle = "#8a5a30"; g.fillRect(tx-6, tableY-8, tw+12, 12);
+    g.fillStyle = "rgba(0,0,0,.2)"; for(let k=1;k<4;k++) g.fillRect(tx+tw*k/4, tableY+4, 3, th-4);
+    g.fillStyle = "#1f7a4d"; rr(g, tx+10, tableY-s*0.95, tw-20, s*0.95, 10); g.fill();
+    // 야바위꾼 (상자 왼쪽에서 굴릴 땐 손을 흔든다)
+    const hu = clamp(H/80, 2, 4);
+    drawPerson(g, {top:1, bottom:1, hair:3, hairColor:3, skin:1}, tx-7*hu, tableY+th, hu, room.phase === "rolling" && now-rollStart < 2.6 ? "wave" : "idle", now, 5);
+
+    // 주사위 두 개
+    const rolling = room.phase === "rolling" || room.phase === "result", t = now-rollStart, LAND = 2.6, restY = tableY-s*0.62;
+    let landedNow = !rolling || t >= LAND;
+    for(let k=0;k<2;k++){
+      const bx = W/2+(k ? 0.75 : -0.75)*s;
+      if(!D.roll || !rolling){ drawDie(g, bx, restY+S(now*2+k)*1.5, s, k ? 6 : 1, 0, k === 1); continue; } // 베팅 중: 가만히 놓여 있다
+      if(t < LAND){
+        const f = t/LAND, amp = (1-f)*(1-f);
+        const face = t > LAND-0.22 ? D.roll[k] : 1+Math.floor(Math.abs(S((Math.floor(t*15)+k*5)*91.7))*6)%6;
+        g.fillStyle = "rgba(0,0,0,.25)"; g.beginPath(); g.ellipse(bx, restY+s*0.55, s*0.5, s*0.12, 0, 0, T); g.fill();
+        drawDie(g, bx+S(t*6+k*2.5)*amp*s*1.1, restY-Math.abs(S(t*8.5+k*1.3))*amp*H*0.34, s, face, (k ? 1 : -1)*t*13*amp, k === 1);
+      } else {
+        const sq = clamp(1-(t-LAND)*6, 0, 1)*0.12; // 착지 직후 살짝 눌렸다 돌아온다
+        g.save(); g.translate(bx, restY+s/2); g.scale(1+sq, 1-sq); drawDie(g, 0, -s/2, s, D.roll[k], 0, k === 1); g.restore();
+      }
+    }
+    g.restore();
+    if(rolling && D.roll){
+      if(t < LAND && R() < dt*14 && actx) drum(actx.currentTime, 0.03, 0.035, 2600); // 달그락
+      if(t >= LAND && !rollLanded){ // 착지!
+        rollLanded = true; tone(130,0.25,"sine",0.2,50); if(actx) drum(actx.currentTime, 0.12, 0.09, 900);
+        burst(16, null, tableY-4, (dx) => ({x:W/2+dx*s, color:"#c9a468", vx:dx*160, vy:-40-R()*60, g:260, life:0.5, w:4+R()*3, spin:6}));
+      }
+      if(t >= LAND){ // 합계가 뿅 하고 뜬다
+        const sumV = D.roll[0]+D.roll[1], pop = clamp((t-LAND)/0.25, 0, 1), fs = clamp(H*0.13, 26, 58)*(0.6+0.4*pop+0.25*S(pop*PI));
+        g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 7; g.lineJoin = "round"; g.strokeStyle = "#161320"; g.fillStyle = "#ffdd7a";
+        g.strokeText(String(sumV), W/2, H*0.17); g.fillText(String(sumV), W/2, H*0.17);
+        const tag = (sumV%2 ? "홀" : "짝")+" · "+(sumV === 7 ? "세븐!" : sumV > 7 ? "업" : "다운")+(D.roll[0] === D.roll[1] ? " · 더블!" : "");
+        pill(g, W/2, H*0.17+fs*0.78, tag, "rgba(11,10,19,.85)", "#fff", clamp(H*0.04, 11, 16));
+      }
+    }
+
+    // 구경꾼 겸 플레이어들
+    const pu = clamp(H/88, 2, 3.6);
+    room.players.forEach((p, i) => {
+      const cx = W*(i+0.5)/n, pay = res && res.payouts[p.id], stake = sum(room.phase === "betting" ? p.bets : diceSnap[p.id] || p.bets);
+      const pose = p.mining ? "mine" : pay ? (pay.win > pay.bet ? "cheer" : pay.win < pay.bet ? "sad" : "idle") : "idle";
+      drawPerson(g, p.look, cx, H-3, pu, pose, now, i*1.7);
+      const lines = [["$"+p.money, "#ffdd7a"], [p.name, PCOL[p.color]]];
+      if(pay) lines.unshift([(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"]);
+      else if(stake) lines.unshift(["🎲 $"+stake, "#fff"]);
+      personLabel(g, p, cx, H-3-21*pu, 11, lines.reverse());
+    });
+    stepParticles(dt, null);
+  }
+
   // ---------- 블랙잭 테이블 장면 ----------
   const SUITS = ["♠","♥","♦","♣"], DEALER_LOOK = {top:7, bottom:1, hair:0, hairColor:0, skin:0};
   function bjTotal(cards){ // 서버 bjTotal과 같은 규칙. 안 보이는 카드(null)는 건너뛴다
@@ -1541,6 +1690,7 @@
       return drawNight(ts, dt);
     }
     if(room.game === "blackjack") return drawBlackjack(ts, dt);
+    if(room.game === "dice") return drawDice(ts, dt);
     if(!room.entrants) return;
     const cur = draw(ts, dt);
     if(!$("panel-bet").hidden) drawCards(ts/1000, dt);

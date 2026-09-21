@@ -57,8 +57,27 @@ const WAGE = 200; // 아오지 탄광 일당
 const GAMES = [
   { key: "derby", name: "경마", cap: (day) => 200 + 100 * day },
   { key: "blackjack", name: "블랙잭", cap: (day) => 50 + 50 * day },
+  { key: "dice", name: "주사위", cap: (day) => 50 + 50 * day }, // 하루 DICE_ROUNDS판, cap은 판당
 ];
 const BJ_HANDS = 3;
+const DICE_ROUNDS = 3;
+const DICE_EDGE = 0.95; // 주사위 환급률. 배당 = 0.95 × 36 ÷ (맞는 경우의 수) → 확률에 정확히 반비례
+// 주사위 2개 베팅 칸. 순서(인덱스)가 곧 me.bets의 키이고 클라이언트 DICE_LABELS와 같아야 한다.
+// 업/다운은 7을 뺀 위아래라서 7이 나오면 둘 다 꽝(= 하우스 몫).
+const DICE_BETS = [
+  { key: "odd", win: (a, b) => (a + b) % 2 === 1 },
+  { key: "even", win: (a, b) => (a + b) % 2 === 0 },
+  { key: "down", win: (a, b) => a + b < 7 },
+  { key: "up", win: (a, b) => a + b > 7 },
+  { key: "double", win: (a, b) => a === b },
+  ...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((n) => ({ key: "sum" + n, win: (a, b) => a + b === n })),
+];
+for (const bet of DICE_BETS) { // 36가지를 직접 세어서 배당을 만든다 (손으로 적은 표가 틀릴 일이 없게)
+  let ways = 0;
+  for (let a = 1; a <= 6; a++) for (let b = 1; b <= 6; b++) if (bet.win(a, b)) ways++;
+  bet.ways = ways;
+  bet.odds = Math.round((DICE_EDGE * 36 / ways) * 10) / 10;
+}
 const LOOK_SIZES = { top: 8, bottom: 6, hair: 6, hairColor: 6, skin: 4 }; // 클라이언트 팔레트/머리모양 개수와 같아야 함
 const TRACK = 1000; // 트랙 길이 (클라이언트와 같아야 함)
 const DT = 0.1; // 시뮬레이션 1틱(초) (클라이언트와 같아야 함)
@@ -224,6 +243,7 @@ function broadcastRoom(room) {
     type: "room",
     room: { code: room.code, title: room.title, phase: room.phase, day: room.day, days: DAYS, game: room.game, cap: room.cap,
       entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
+      dice: room.dice,
       bj: room.bj && { hand: room.bj.hand, hands: room.bj.hands, hidden: room.bj.hidden, // 덱과 딜러의 뒷장은 절대 내보내지 않는다
         dealer: room.bj.hidden ? room.bj.dealer.map((c, i) => (i === 1 ? null : c)) : room.bj.dealer } },
   });
@@ -256,12 +276,13 @@ function startDay(room) {
   room.phase = "betting";
   room.entrants = game.key === "derby" ? pickEntrants() : null;
   room.bj = game.key === "blackjack" ? { hand: 1, hands: BJ_HANDS, dealer: [], hidden: true, deck: bjDeck() } : null;
+  room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
   room.race = null;
   room.result = null;
   room.night = null;
   for (const p of room.players.values()) Object.assign(p, { ready: false, begging: false, begged: false, bets: {}, bj: null, dayStart: p.money });
   if (room.day === 1) broadcastRoomList(); // 목록에 "대기 중" → "DAY 1/7"
-  sys(room, "☀️ DAY " + room.day + "/" + DAYS + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
+  sys(room, "☀️ DAY " + room.day + "/" + DAYS + " — 오늘의 도박은 " + game.name + "! (" + (room.bj ? BJ_HANDS + "판 · 판당 " : room.dice ? DICE_ROUNDS + "판 · 판당 " : "") + "베팅 상한 $" + room.cap + ")");
   broadcastRoom(room);
   checkAllReady(room); // 전원 탄광행이면 아무도 준비할 사람이 없다 → 바로 진행
 }
@@ -270,6 +291,7 @@ function checkAllReady(room) {
   if (room.phase !== "betting" || room.players.size === 0) return;
   for (const p of room.players.values()) if (!p.ready && !p.mining) return;
   if (room.game === "blackjack") return bjDeal(room);
+  if (room.game === "dice") return diceRoll(room);
   room.phase = "countdown";
   broadcastRoom(room);
   countdown(room, 3);
@@ -409,6 +431,41 @@ function bjAction(room, me, a) {
   bjCheckDone(room);
 }
 
+// ---------- 주사위 ----------
+// 모두 준비되면 서버가 굴린다. 값은 바로 내려가지만(베팅은 이미 잠김) 클라이언트가 3초쯤 굴리는 연출을 한 뒤에 보여주고,
+// 돈은 그 연출이 끝나는 시점(diceSettle)에 맞춰 움직인다.
+function diceRoll(room) {
+  room.phase = "rolling";
+  room.dice.roll = [1 + Math.floor(Math.random() * 6), 1 + Math.floor(Math.random() * 6)];
+  broadcastRoom(room);
+  room.timer = setTimeout(() => diceSettle(room), 3400);
+}
+
+function diceSettle(room) {
+  const D = room.dice, [a, b] = D.roll, payouts = {};
+  for (const p of room.players.values()) {
+    const entries = Object.entries(p.bets);
+    if (!entries.length) continue;
+    let bet = 0, win = 0;
+    for (const [i, amt] of entries) { bet += amt; if (DICE_BETS[i].win(a, b)) win += Math.floor(amt * DICE_BETS[i].odds); }
+    p.money += win;
+    p.bets = {};
+    payouts[p.id] = { bet, win };
+  }
+  room.phase = "result";
+  room.result = { roll: D.roll, hits: DICE_BETS.map((bt, i) => (bt.win(a, b) ? i : -1)).filter((i) => i >= 0), payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => {
+    if (D.round >= D.rounds) return startNight(room);
+    D.round++; D.roll = null;
+    room.phase = "betting";
+    room.result = null;
+    for (const p of room.players.values()) p.ready = false;
+    broadcastRoom(room);
+    checkAllReady(room);
+  }, 5500);
+}
+
 function startNight(room) {
   room.phase = "night";
   room.night = {};
@@ -519,13 +576,13 @@ function handleMessage(ws, msg) {
     broadcast(room, { type: "chat", id: me.id, name: me.name, color: me.color, text });
   } else if (msg.type === "again") {
     if (room.phase !== "final") return;
-    Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, race: null, result: null, night: null });
+    Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, race: null, result: null, night: null });
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
     broadcastRoom(room);
     broadcastRoomList();
   } else if (msg.type === "bet") {
     const i = msg.i;
-    if (!canBet || !Number.isInteger(i) || i < 0 || i >= (room.entrants ? room.entrants.length : 1)) return; // 블랙잭은 0번 칸 하나
+    if (!canBet || !Number.isInteger(i) || i < 0 || i >= (room.entrants ? room.entrants.length : room.dice ? DICE_BETS.length : 1)) return; // 경마=출전 수, 주사위=베팅 칸 수, 블랙잭=0번 칸 하나
     const spent = Object.values(me.bets).reduce((a, b) => a + b, 0);
     const amount = Math.min(Math.floor(Number(msg.amount)), me.money, room.cap - spent); // 크게 오면 상한(또는 가진 돈)까지만
     if (!(amount > 0)) return;
@@ -616,6 +673,33 @@ if (process.argv.includes("--check")) {
   const p = { id: "p", money: 700, bets: { 2: 100, 4: 200 } };
   assert.deepStrictEqual(settle([p], entrants, 2), { p: { bet: 300, win: 350 } });
   assert(p.money === 1050 && Object.keys(p.bets).length === 0);
+  // 주사위: 경우의 수·배당·기대 환급률, 그리고 짜고 굴린 한 판
+  assert.deepStrictEqual(DICE_BETS.slice(0, 5).map((b) => b.ways), [18, 18, 15, 15, 6]);
+  assert.deepStrictEqual(DICE_BETS.slice(5).map((b) => b.ways), [1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1]);
+  for (const b of DICE_BETS) assert(Math.abs(b.odds * b.ways / 36 - DICE_EDGE) < 0.02, b.key + " 환급률이 어긋남");
+  console.log("주사위 배당", DICE_BETS.map((b) => b.key + " x" + b.odds).join(", "));
+  process.env.GAME = "dice";
+  const fd = () => ({ id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} });
+  const d1 = fd();
+  handleMessage(d1, { type: "create", name: "D1" });
+  handleMessage(d1, { type: "start" });
+  const dr = d1.room, D1 = dr.players.get(d1);
+  assert(dr.game === "dice" && dr.cap === 100 && dr.dice.odds.length === 16);
+  handleMessage(d1, { type: "bet", i: 0, amount: 40 });   // 홀
+  handleMessage(d1, { type: "bet", i: 10, amount: 999 }); // 합 7 (상한 100에서 남은 60까지만)
+  handleMessage(d1, { type: "bet", i: 16, amount: 10 });  // 없는 칸
+  assert(D1.bets[0] === 40 && D1.bets[10] === 60 && D1.money === 900 && !(16 in D1.bets));
+  handleMessage(d1, { type: "ready", v: true });
+  assert(dr.phase === "rolling" && dr.dice.roll.every((v) => v >= 1 && v <= 6));
+  clearTimeout(dr.timer);
+  dr.dice.roll = [3, 4]; // 합 7: 홀 적중(40×1.9=76) + 단일 7 적중(60×5.7=342)
+  diceSettle(dr);
+  clearTimeout(dr.timer);
+  assert.deepStrictEqual(dr.result.hits, [0, 10]);
+  assert(D1.money === 900 + 76 + 342 && dr.result.payouts[D1.id].win === 418, "7이면 업/다운은 둘 다 꽝, 홀과 단일 7만 적중");
+  delete process.env.GAME;
+  rooms.delete(dr.code);
+
   // 블랙잭: 합계 / 승패 / 짜고 치는 덱으로 한 판
   assert(bjTotal(["A0", "K1"]) === 21 && bjTotal(["A0", "A1", "92"]) === 21 && bjTotal(["K0", "Q1", "52"]) === 25);
   assert.deepStrictEqual(bjOutcome(["A0", "K1"], "blackjack", ["K0", "92"]), ["blackjack", 2.5]);

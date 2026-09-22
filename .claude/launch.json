@@ -20,6 +20,17 @@
         "server.js"
       ],
       "port": 3111
+    },
+    {
+      "name": "armwrestle-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=armwrestle",
+        "PORT=3114",
+        "node",
+        "server.js"
+      ],
+      "port": 3114
     }
   ]
 }

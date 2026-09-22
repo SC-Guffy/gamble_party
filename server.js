@@ -60,7 +60,7 @@ const WAGE = 100; // 아오지 탄광 기본 일당 (+ 그날 캔 돈, 합계 �
 // min = 최소 인원(없으면 1). 방 인원이 모자라면 투표 카드/무작위 후보에서 빠진다.
 // 경마 = 하루 1경주, cap은 하루 총액. 블랙잭 = 하루 BJ_HANDS판, cap은 판당(더블다운은 상한과 별개로 판돈만큼 더 낸다).
 // 한 판 최고 배수. 이보다 크면 한 방에 판이 끝난다(판당 상한이 있어서 나머지는 대박 말고는 못 따라잡고, 1등은 구경만 해도 이긴다).
-// 경마·주사위는 여기서 배당을 자르고(롱샷만 하우스에 불리해짐), 풍선·펭귄·플링코는 규칙 자체를 이 안에 들어오게 만들었다.
+// 경마·주사위는 여기서 배당을 자르고(롱샷만 하우스에 불리해짐), 펭귄·플링코는 규칙 자체를 이 안에 들어오게 만들었다.
 const MAX_MULT = 15;
 const GAMES = [
   { key: "derby", name: "경마", cap: (day) => 200 + 100 * day }, // st = 그날 상태가 담기는 room 필드(판수 안내용), capName = 하루 시작 안내에서 cap을 부르는 말
@@ -71,7 +71,6 @@ const GAMES = [
   { key: "indian", name: "인디언 포커", cap: (day) => 50 + 50 * day, min: 2, st: "ip", capName: "참가비" }, // 하루 IP_ROUNDS판, cap = 판당 참가비(고정). 콜도 같은 금액
   { key: "auction", name: "미스터리 상자 경매", cap: (day) => 100 + 100 * day, min: 2, st: "au", capName: "상자 기준가", free: true }, // 하루 AU_ROUNDS판, 상자 금액 = cap × AU_MULTS (입찰은 가진 돈까지)
   { key: "watergun", name: "러시안 룰렛", cap: (day) => 50 + 50 * day, min: 2, st: "wg", capName: "참가비" }, // 하루 WG_ROUNDS판, cap = 판당 고정 참가비
-  { key: "balloon", name: "풍선 불기", cap: (day) => 50 + 50 * day, st: "bl" }, // 하루 BL_ROUNDS판, cap은 판당
   { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day, st: "cn", free: true }, // 하루 CN_ROUNDS판, 투자금은 가진 돈까지
   { key: "plinko", name: "플링코", cap: (day) => 50 + 50 * day, st: "pk" }, // 하루 PK_ROUNDS판, cap은 판당
   { key: "duel", name: "총잡이 결투", cap: (day) => 50 + 50 * day, min: 2, st: "du", capName: "참가비" }, // 하루 DU_ROUNDS판, cap = 판당 고정 참가비
@@ -289,7 +288,6 @@ function broadcastRoom(room) {
       entrants: room.entrants, result: room.result, night: room.night, tribute: trAmt(room), trib: room.trib, players: [...room.players.values()],
       dice: room.dice,
       ip: room.ip && ipView(room.ip), // 카드·결정은 공개 전까지 절대 내보내지 않는다
-      bl: room.bl && { round: room.bl.round, rounds: room.bl.rounds, rate: BL_RATE, max: BL_MAX, ff: BL_FF, elapsed: Date.now() - room.bl.t0, cash: room.bl.cash, crash: room.bl.crash, ffAt: room.bl.ffAt }, // hidden(터지는 배수)은 절대 내보내지 않는다
       pk: room.pk && { round: room.pk.round, rounds: room.pk.rounds, zoneOf: room.pk.zoneOf, odds: room.pk.odds, jack: room.pk.jack, jackMult: room.pk.jackMult, drops: room.pk.drops, since: Date.now() - room.pk.t0 }, // since = 첫 공 출발 후 경과(ms), 도중 입장해도 같은 장면
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults, gold: room.pg.gold },
       cn: room.cn, // 코인: 지금까지의 가격 기록·체결 내역뿐 (미래 가격은 서버에도 없다). 도중 입장자도 이걸로 차트를 그린다
@@ -383,7 +381,6 @@ function startDay(room, key) {
   room.dg = game.key === "dodge" ? { round: 1, rounds: DG_ROUNDS } : null;
   room.aw = game.key === "armwrestle" ? { round: 1, rounds: AW_ROUNDS, cnt: {} } : null; // cnt = 오늘 선수로 뛴 횟수 (돌아가며 뽑기)
   room.rh = game.key === "rhythm" ? { round: 1, rounds: RH_ROUNDS } : null;
-  room.bl = game.key === "balloon" ? { round: 1, rounds: BL_ROUNDS, t0: 0, hidden: null, cash: {}, crash: null, ffAt: 0 } : null;
   room.cn = game.key === "coin" ? { round: 1, rounds: CN_ROUNDS, ticks: CN_TICKS, fee: CN_FEE, ...cnFresh() } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
   room.nc = game.key === "nunchi" ? { round: 1, rounds: NC_ROUNDS, carry: 0, picks: {}, shown: null } : null;
@@ -409,7 +406,6 @@ function startDay(room, key) {
   if (room.aw) sys(room, "💪 매판 2명이 팔씨름! 선수는 연타(클릭/스페이스)로 상대 팔을 넘기면 참가비 합의 95% · 나머지는 이길 쪽에 베팅 (패리뮤추얼)");
   if (room.aw) awPick(room); // 참가비는 dayStart를 잡은 뒤에 뗀다
   if (room.pg) sys(room, "✨ 매판 황금 얼음이 하나! 거기로 뛰는 점프는 성공률 반토막, 성공하면 배당 두 배");
-  if (room.bl) sys(room, "🎈 터지기 전에 놓으면 그때 배수만큼! 못 놓고 터지면 판돈 전액 잃음 (최대 x" + BL_MAX + ") · 👑 제일 늦게 놓고 살아남은 1명은 남들 수익의 " + BL_LAST * 100 + "%를 떼 간다");
   if (room.cn) sys(room, "🪙 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 현금으로 시작, 매수 = 전액 코인 / 매도 = 전액 현금 (거래마다 수수료 " + CN_FEE * 100 + "%, 마감 때 자동 매도)");
   if (room.au) sys(room, "🎁 몰래 입찰 → 최고가 1명만 입찰가를 내고 상자를 가져가요 · 각자 비밀 힌트가 하나씩 · 💣 폭탄 상자를 사면 돈을 더 뱉어요!");
   sys(room, "🚬 오늘 밤 상납금 $" + trAmt(room) + " — 못 내면(가진 돈 ≤ 상납금) 사채업자가 아오지 탄광으로 끌고 갑니다");
@@ -435,7 +431,6 @@ function checkAllReady(room) {
   if (room.game === "dodge") return dgStart(room);
   if (room.game === "armwrestle") return awStart(room);
   if (room.game === "rhythm") return rhStart(room);
-  if (room.game === "balloon") return blStart(room);
   if (room.game === "coin") return cnStart(room);
   if (room.game === "plinko") return pkDrop(room);
   room.phase = "countdown";
@@ -1512,104 +1507,6 @@ function rhJoin(room, me, v) { // 참가(참가비 cap 고정) / 취소
   broadcastRoom(room);
 }
 
-// ---------- 풍선 불기 ----------
-// 크래시 게임: 공용 풍선의 배수 m(t) = e^(BL_RATE·t)가 x1.00부터 부풀고, 터지기 전에 "놓기"를 누르면 그때 배수만큼 받는다. 판돈은 me.bets[0].
-// 터지는 배수는 시작할 때 미리 뽑아 room.bl.hidden에만 둔다(broadcastRoom은 필드를 골라 보내므로 밖으로 안 나간다).
-// crash = 0.95 / U → P(crash ≥ m) = 0.95 / m → 어디서 놓든 기대 환급률 95%. (5%는 x1.00에서 바로 펑 = 하우스 몫)
-// 클라이언트엔 경과 시간(elapsed)과 성장률만 주고 곡선은 각자 그린다. 누가 몇 배에 놓았는지(cash)는 바로, crash는 터진 뒤(또는 전원이 놓은 뒤)에만 공개.
-const BL_ROUNDS = 3;
-const BL_EDGE = 0.95;
-const BL_RATE = 0.12; // 약 5.8초에 x2, 19초에 x10
-const BL_MAX = MAX_MULT; // 상한(약 23초). 여기까지 버틴 사람은 자동 회수 — 상한에서 회수라 환급률 95%는 그대로
-const BL_COUNT = 3000; // 부풀기 전 카운트다운(ms)
-const BL_FF = 2500; // 전원이 놓은 뒤, 터지는 곳까지 빨리 감아 보여주는 시간(ms)
-const blCrash = () => Math.min(BL_MAX, Math.max(1, BL_EDGE / (1 - Math.random())));
-const blTime = (m) => (Math.log(m) / BL_RATE) * 1000; // 배수 m에 도달하는 시각(ms)
-const blWin = (bet, m) => Math.floor((bet * Math.round(m * 100)) / 100); // 배수는 소수 둘째 자리까지라 정수로 곱해 부동소수 오차를 피한다 (클라이언트 blWin과 같아야 함)
-
-function blStart(room) {
-  room.phase = "blCount";
-  Object.assign(room.bl, { t0: Date.now() + BL_COUNT, hidden: blCrash(), cash: {}, crash: null, ffAt: 0 }); // t0가 미래 = 카운트다운 중 (숫자는 클라이언트가 센다)
-  broadcastRoom(room);
-  room.timer = setTimeout(() => blFly(room), BL_COUNT);
-}
-
-function blFly(room) {
-  const B = room.bl;
-  room.phase = "blFly";
-  B.t0 = Date.now();
-  broadcastRoom(room);
-  room.timer = setTimeout(() => blPop(room), blTime(B.hidden));
-  blCheckDone(room); // 아무도 안 걸었으면 바로 빨리 감기
-}
-
-function blAct(room, me) {
-  const B = room.bl;
-  if (room.phase !== "blFly" || !B || !me.bets[0] || me.id in B.cash) return;
-  const m = Math.exp((BL_RATE * (Date.now() - B.t0)) / 1000); // 서버 시각 기준
-  if (m >= B.hidden) return; // 타이머가 밀렸을 뿐 이미 터졌어야 할 시각 → 무효
-  B.cash[me.id] = Math.floor(m * 100) / 100;
-  broadcastRoom(room);
-  blCheckDone(room);
-}
-
-// 쥐고 있는 사람이 없으면 더 숨길 게 없다 → 터지는 배수를 공개하고, 클라이언트가 거기까지 빨리 감아 보여준다("아까웠다" 연출). 최대 33초를 멍하니 기다리지 않게.
-function blCheckDone(room) {
-  const B = room.bl;
-  if (room.phase !== "blFly" || B.crash) return;
-  for (const p of room.players.values()) if (p.bets[0] && !(p.id in B.cash)) return;
-  B.crash = B.hidden;
-  B.ffAt = Date.now() - B.t0;
-  broadcastRoom(room);
-  clearTimeout(room.timer);
-  room.timer = setTimeout(() => blPop(room), Math.min(BL_FF, Math.max(0, blTime(B.hidden) - B.ffAt)));
-}
-
-function blPop(room) {
-  const B = room.bl;
-  room.phase = "blPop";
-  B.crash = B.hidden;
-  if (B.crash >= BL_MAX) for (const p of room.players.values()) if (p.bets[0] && !(p.id in B.cash)) B.cash[p.id] = BL_MAX; // 상한까지 버텼으면 자동 회수
-  broadcastRoom(room);
-  room.timer = setTimeout(() => blSettle(room), 1500); // 펑 연출을 보고 나서 정산
-}
-
-// 👑 최후의 1인: 터지기 전에 놓은 사람이 2명 이상이면, 가장 늦게(가장 높은 배수에) 놓은 1명이 나머지가 번 돈의 BL_LAST만큼 떼 간다 (동점이면 없음)
-const BL_LAST = 0.05;
-
-function blSettle(room) {
-  const B = room.bl, payouts = {};
-  for (const p of room.players.values()) {
-    if (!p.bets[0]) continue;
-    const bet = p.bets[0], win = blWin(bet, B.cash[p.id] || 0);
-    payouts[p.id] = { bet, win };
-  }
-  const cashed = Object.keys(payouts).filter((id) => B.cash[id]).sort((a, b) => B.cash[b] - B.cash[a]);
-  let last = null;
-  if (cashed.length >= 2 && B.cash[cashed[0]] > B.cash[cashed[1]]) {
-    last = { id: cashed[0], bonus: 0 };
-    for (const id of cashed.slice(1)) {
-      const cut = Math.floor(Math.max(0, payouts[id].win - payouts[id].bet) * BL_LAST);
-      payouts[id].win -= cut;
-      last.bonus += cut;
-    }
-    payouts[last.id].win += last.bonus;
-  }
-  for (const p of room.players.values()) if (payouts[p.id]) { p.money += payouts[p.id].win; p.bets = {}; }
-  room.phase = "result";
-  room.result = { crash: B.crash, cashouts: B.cash, payouts, last };
-  broadcastRoom(room);
-  room.timer = setTimeout(() => {
-    if (B.round >= B.rounds) return startNight(room);
-    B.round++;
-    room.phase = "betting";
-    room.result = null;
-    for (const p of room.players.values()) p.ready = false;
-    broadcastRoom(room);
-    checkAllReady(room);
-  }, 5000);
-}
-
 // ---------- 도박 코인 단타 ----------
 // 투자금(me.bets[0])을 들고 30초짜리 장에 들어가 아무 때나 전액 매수 ↔ 전액 매도. p.cn = { cash, coins, last } (안 건 사람은 null = 구경)
 // 가격은 틱마다 그 자리에서 하나씩 만든다 — 미래 가격은 서버에도 없으니 샐 수가 없다. 틱은 가벼운 cnTick 메시지로, room 전체는 체결 때만 보낸다.
@@ -2069,7 +1966,6 @@ function leaveRoom(ws) {
   if (room.dg) dgCheck(room); // 나간 사람 빼고 1명만 남은 경우
   if (room.aw) awCheck(room); // 경기 중 선수가 나가면 부전승
   if (room.rh) rhCheck(room); // 나간 사람만 살아 있었던 경우
-  if (room.bl) blCheckDone(room); // 나간 사람만 줄을 쥐고 있었던 경우
 }
 
 // ---------- 이모티콘 리액션 ----------
@@ -2154,7 +2050,6 @@ function handleMessage(ws, msg) {
     room.cn = null;
     room.pk = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
-    room.bl = null;
     room.rcLeft.clear(); rcHostFix(room); // 재접속: 지난 판 스냅샷은 버리고, 끊긴 사람(📴)은 방장 자리에서 뒤로
     for (const p of room.players.values()) p.lnDebt = 0; // 새 게임이면 사채도 탕감
     for (const p of room.players.values()) Object.assign(p, { ttStats: ttNew(), ttTitles: null }); // 시상식 칭호 초기화
@@ -2185,8 +2080,6 @@ function handleMessage(ws, msg) {
     room.vote.votes[me.id] = msg.i;
     broadcastRoom(room);
     checkVoteReady(room); // 마지막 사람이 누르는 순간 추첨
-  } else if (msg.type === "blAct") {
-    blAct(room, me);
   } else if (msg.type === "cnAct") {
     cnAct(room, me, msg.a);
   } else if (msg.type === "pg") {
@@ -2255,7 +2148,6 @@ const rcAutoAct = {
   },
   indian: (room, p) => ipAct(room, p, "die"), // 결정 못 하고 끊기면 다이 (이미 정했으면 ipAct가 무시)
   watergun: (room, p) => wgAct(room, p, "pull"), // 자기 차례면 당긴다 (차례가 아니면 wgAct가 무시)
-  balloon: (room, p) => blAct(room, p), // 쥐고 있던 풍선은 그 자리에서 놓는다
   stopwatch: (room) => swCheck(room), // 📴는 안 누른 걸로 친다 → 나머지가 다 멈췄으면 끝낸다
 };
 // 복귀할 때 부르는 훅 (room, ws, p): 게임별로 본인에게만 보내던 비공개 정보를 다시 보낸다. 새 게임이 rcResync.push(...)로 붙인다.
@@ -2939,69 +2831,6 @@ if (process.argv.includes("--check")) {
     delete process.env.GAME;
     rooms.delete(r.code);
   }
-
-  // 풍선 불기: crash 분포(P(crash ≥ m) = 0.95/m) + 짜고 친 한 판 (A는 x1.5에 놓고, B는 쥐고 있다가 x2.5에서 펑) + crash가 미리 새지 않는지
-  let blGe2 = 0, blGe10 = 0;
-  for (let i = 0; i < 200000; i++) { const c = blCrash(); assert(c >= 1 && c <= BL_MAX); if (c >= 2) blGe2++; if (c >= 10) blGe10++; }
-  console.log("풍선 P(crash≥x2)", (blGe2 / 2000).toFixed(1) + "%", "P(crash≥x10)", (blGe10 / 2000).toFixed(1) + "%");
-  assert(Math.abs(blGe2 / 200000 - 0.475) < 0.01 && Math.abs(blGe10 / 200000 - 0.095) < 0.005, "풍선 crash 분포가 어긋남");
-  assert(blWin(100, 1.15) === 115 && blWin(37, 1.5) === 55 && blWin(100, 0) === 0);
-  process.env.GAME = "balloon";
-  const blSent = [], fb = () => ({ id: crypto.randomUUID(), room: null, readyState: 1, OPEN: 1, send(d) { blSent.push(d); } }); // 보낸 걸 전부 기록
-  const b1 = fb(), b2 = fb(), b3 = fb();
-  handleMessage(b1, { type: "create", name: "L1" });
-  handleMessage(b2, { type: "join", id: b1.room.code, name: "L2" });
-  handleMessage(b3, { type: "join", id: b1.room.code, name: "L3" }); // 안 걸고 구경
-  handleMessage(b1, { type: "start" });
-  const lr = b1.room, L1 = lr.players.get(b1), L2 = lr.players.get(b2), L3 = lr.players.get(b3);
-  assert(lr.game === "balloon" && lr.cap === 100 && lr.bl.round === 1);
-  handleMessage(b1, { type: "bet", i: 0, amount: 999 });
-  handleMessage(b2, { type: "bet", i: 0, amount: 50 });
-  handleMessage(b1, { type: "blAct" }); // 베팅 중엔 무효
-  for (const w of [b1, b2, b3]) handleMessage(w, { type: "ready", v: true });
-  assert(lr.phase === "blCount" && lr.bl.hidden >= 1 && L1.bets[0] === 100 && !Object.keys(lr.bl.cash).length);
-  clearTimeout(lr.timer);
-  blFly(lr);
-  clearTimeout(lr.timer);
-  lr.bl.hidden = 2.5;
-  lr.bl.t0 = Date.now() - blTime(1.505); // m(t) = x1.50대인 시점
-  handleMessage(b1, { type: "blAct" });
-  handleMessage(b1, { type: "blAct" }); // 두 번은 못 놓는다
-  handleMessage(b3, { type: "blAct" }); // 구경꾼은 놓을 게 없다
-  assert(lr.bl.cash[L1.id] === 1.5 && Object.keys(lr.bl.cash).length === 1 && lr.bl.crash === null && lr.phase === "blFly");
-  assert(blSent.length > 10 && blSent.every((d) => !d.includes("hidden") && !d.includes("2.5")), "터지기 전엔 crash가 브로드캐스트에 없어야 한다");
-  lr.bl.t0 = Date.now() - blTime(2.6); // 타이머가 밀려 아직 안 터졌지만 이미 crash를 지난 시각 → 무효
-  handleMessage(b2, { type: "blAct" });
-  blPop(lr);
-  clearTimeout(lr.timer);
-  handleMessage(b2, { type: "blAct" }); // 터진 뒤 놓기도 무효
-  assert(lr.phase === "blPop" && lr.bl.crash === 2.5 && !(L2.id in lr.bl.cash) && blSent[blSent.length - 1].includes('"crash":2.5'));
-  assert(L1.money === 900, "돈은 펑 연출이 끝난 뒤(blSettle)에 움직인다");
-  blSettle(lr);
-  clearTimeout(lr.timer);
-  assert(L1.money === 900 + 150 && L2.money === 950 && L3.money === START_MONEY, "x1.5에 놓으면 floor(100 × 1.5), 못 놓으면 0");
-  assert.deepStrictEqual(lr.result, { crash: 2.5, cashouts: { [L1.id]: 1.5 }, payouts: { [L1.id]: { bet: 100, win: 150 }, [L2.id]: { bet: 50, win: 0 } }, last: null }); // 놓은 사람이 1명이면 최후의 1인 없음
-  { // 👑 최후의 1인: L1 x1.5, L2 x3 → L2가 L1 수익(50)의 5% = 2를 떼 간다
-    const m1 = L1.money, m2 = L2.money;
-    Object.assign(lr.bl, { cash: { [L1.id]: 1.5, [L2.id]: 3 }, crash: 4 }); L1.bets = { 0: 100 }; L2.bets = { 0: 100 };
-    blSettle(lr); clearTimeout(lr.timer);
-    assert(L1.money === m1 + 148 && L2.money === m2 + 302 && lr.result.last.id === L2.id && lr.result.last.bonus === 2, "최후의 1인 보너스");
-    L1.money = m1; L2.money = m2;
-  }
-  lr.phase = "betting"; // 다음 판: 아무도 안 걸면 쥔 사람이 없으니 바로 crash를 공개하고 빨리 감는다
-  blStart(lr);
-  assert(lr.bl.crash === null && !Object.keys(lr.bl.cash).length);
-  clearTimeout(lr.timer);
-  blFly(lr);
-  assert(lr.phase === "blFly" && lr.bl.crash === lr.bl.hidden);
-  lr.bl.hidden = lr.bl.crash = BL_MAX; // 상한까지 버틴 사람은 자동 회수
-  L2.bets = { 0: 10 };
-  clearTimeout(lr.timer);
-  blPop(lr);
-  clearTimeout(lr.timer);
-  assert(lr.bl.cash[L2.id] === BL_MAX && blWin(10, BL_MAX) === 10 * BL_MAX);
-  delete process.env.GAME;
-  rooms.delete(lr.code);
 
   // 도박 코인 단타: 이벤트 평균 0 + 끝까지 들고 있어도 기댓값은 제자리(드리프트 0), 그리고 가격을 정해 놓은 한 판
   assert(Math.abs(CN_EVENTS.reduce((a, e) => a + (e[1] + e[2]) / 2, 0)) < 1e-9, "코인 이벤트 평균이 0이 아님");

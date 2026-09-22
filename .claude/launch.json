@@ -20,6 +20,17 @@
         "server.js"
       ],
       "port": 3111
+    },
+    {
+      "name": "dodge-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=dodge",
+        "PORT=3113",
+        "node",
+        "server.js"
+      ],
+      "port": 3113
     }
   ]
 }

@@ -3014,11 +3014,11 @@
       else if(dt0 != null) lines.push(["💀 "+(dt0/1000).toFixed(1)+"s", "#ff5d72"]);
       personLabel(g, p, x, y-14*pu, 10, lines);
     }
-    // 총알
+    // 총알: 종류와 상관없이 전부 빨강 (진한 테두리로 바닥과 확실히 구분)
+    g.fillStyle = "#e8132b"; g.strokeStyle = "#5a0610"; g.lineWidth = Math.max(1, 1.2*sc);
     for(const b of V.bullets){
       const [bx, by] = bp(b); if(t < b.ts) continue;
-      g.fillStyle = ["#ff5d72","#ffb84d","#7fd0ff"][b.kind]; g.beginPath(); g.arc(X(bx), Y(by), 4.5*sc, 0, T); g.fill();
-      g.fillStyle = "#fff"; g.beginPath(); g.arc(X(bx), Y(by), 2*sc, 0, T); g.fill();
+      g.beginPath(); g.arc(X(bx), Y(by), 4.5*sc, 0, T); g.fill(); g.stroke();
     }
     stepParticles(dt, null);
     g.restore();
@@ -3813,7 +3813,7 @@
       g.fillStyle = "#1d3b22"; g.fillRect(0,0,w,h);
       for(let i = 0; i < 8; i++){ g.fillStyle = i%2 ? "#3f7d3a" : "#5d9c4a"; g.fillRect(i*w/8+S(now+i)*2, 0, w/28, h); }
       const m = Math.min(w,h)*0.12; g.fillStyle = "#d9cfae"; g.fillRect(m, m, w-2*m, h-2*m);
-      for(let k = 0; k < 9; k++){ const a = k*2.4, f = (now*0.6+k/9)%1, r = Math.hypot(w,h)*0.5*(1-f); g.fillStyle = ["#ff5d72","#ffb84d","#7fd0ff"][k%3]; g.beginPath(); g.arc(w/2+Math.cos(a)*r, h/2+Math.sin(a)*r, Math.max(2, w/60), 0, T); g.fill(); }
+      for(let k = 0; k < 9; k++){ const a = k*2.4, f = (now*0.6+k/9)%1, r = Math.hypot(w,h)*0.5*(1-f); g.fillStyle = "#e8132b"; g.beginPath(); g.arc(w/2+Math.cos(a)*r, h/2+Math.sin(a)*r, Math.max(2, w/60), 0, T); g.fill(); }
       const u = Math.min(w/40, h/60); drawPerson(g, {top:0, bottom:0, hair:0, hairColor:0, skin:0}, w/2+S(now*3)*w*0.12, h*0.62, u, "idle", now, 0);
       return;
     }

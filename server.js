@@ -73,6 +73,7 @@ const GAMES = [
   { key: "balloon", name: "풍선 불기", cap: (day) => 50 + 50 * day, st: "bl" }, // 하루 BL_ROUNDS판, cap은 판당
   { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day, st: "cn", free: true }, // 하루 CN_ROUNDS판, 투자금은 가진 돈까지
   { key: "plinko", name: "플링코", cap: (day) => 50 + 50 * day, st: "pk" }, // 하루 PK_ROUNDS판, cap은 판당
+  { key: "duel", name: "총잡이 결투", cap: (day) => 50 + 50 * day, min: 2, st: "du", capName: "참가비" }, // 하루 DU_ROUNDS판, cap = 판당 고정 참가비
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -288,6 +289,7 @@ function broadcastRoom(room) {
       pg: room.pg && { round: room.pg.round, rounds: room.pg.rounds, probs: room.pg.probs, mults: room.pg.mults, gold: room.pg.gold },
       cn: room.cn, // 코인: 지금까지의 가격 기록·체결 내역뿐 (미래 가격은 서버에도 없다). 도중 입장자도 이걸로 차트를 그린다
       wg: room.wg && wgPublic(room.wg),
+      du: room.du && duPublic(room.du),
       au: room.au && { round: room.au.round, rounds: room.au.rounds, vals: room.au.vals, probs: AU_PROBS, ev: AU_EV, reveal: room.au.reveal }, // 상자 금액·입찰액·힌트는 공개 전까지 절대 안 내보낸다
       nc: room.nc && { round: room.nc.round, rounds: room.nc.rounds, carry: room.nc.carry, picks: room.nc.shown }, // 고른 숫자는 공개(ncReveal) 전까지 절대 안 내보낸다
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, voter: room.vote.voter, game: room.vote.game },
@@ -367,6 +369,7 @@ function startDay(room, key) {
   room.bj = game.key === "blackjack" ? { hand: 1, hands: BJ_HANDS, pair: BJ_PAIR, dealer: [], hidden: true, deck: bjDeck() } : null;
   room.pg = game.key === "penguin" ? pgGold({ round: 1, rounds: PG_ROUNDS }) : null;
   room.wg = game.key === "watergun" ? { round: 1, rounds: WG_ROUNDS } : null;
+  room.du = game.key === "duel" ? { round: 1, rounds: DU_ROUNDS } : null;
   room.bl = game.key === "balloon" ? { round: 1, rounds: BL_ROUNDS, t0: 0, hidden: null, cash: {}, crash: null, ffAt: 0 } : null;
   room.cn = game.key === "coin" ? { round: 1, rounds: CN_ROUNDS, ticks: CN_TICKS, fee: CN_FEE, ...cnFresh() } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
@@ -386,6 +389,7 @@ function startDay(room, key) {
   if (room.nc) sys(room, "🙊 1~10 중 남과 안 겹친 가장 작은 숫자가 판돈 독식! 전원 겹치면 다음 판으로 이월");
   if (room.ip) sys(room, "🙈 내 카드만 못 봐요 · 20초 안에 콜($" + room.cap + " 더)/다이 · 10 들고 다이하면 벌금!");
   if (room.wg) sys(room, "💥 6칸 중 1칸에 총알 · 차례마다 당기기, 또는 참가비 절반 내고 넘기기(판당 1회) · 🔫🔫 연속 2발에서 살아남으면 몫 두 배!");
+  if (room.du) sys(room, "🤠 \"쏴!\" 신호가 뜨면 제일 먼저 쏜 사람이 판돈 독식! 신호 전에 쏘면 오발로 아웃 · 🌭 가짜 신호 주의");
   if (room.pg) sys(room, "✨ 매판 황금 얼음이 하나! 거기로 뛰는 점프는 성공률 반토막, 성공하면 배당 두 배");
   if (room.bl) sys(room, "🎈 터지기 전에 놓으면 그때 배수만큼! 못 놓고 터지면 판돈 전액 잃음 (최대 x" + BL_MAX + ") · 👑 제일 늦게 놓고 살아남은 1명은 남들 수익의 " + BL_LAST * 100 + "%를 떼 간다");
   if (room.cn) sys(room, "🪙 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 현금으로 시작, 매수 = 전액 코인 / 매도 = 전액 현금 (거래마다 수수료 " + CN_FEE * 100 + "%, 마감 때 자동 매도)");
@@ -407,6 +411,7 @@ function checkAllReady(room) {
   if (room.game === "indian") return ipDeal(room);
   if (room.game === "auction") return auReveal(room);
   if (room.game === "watergun") return wgStart(room);
+  if (room.game === "duel") return duStart(room);
   if (room.game === "balloon") return blStart(room);
   if (room.game === "coin") return cnStart(room);
   if (room.game === "plinko") return pkDrop(room);
@@ -969,6 +974,101 @@ function wgCheck(room) {
   if (!wgCur(room) || wgHere(room).length < 2) wgNextTurn(room);
 }
 
+// ---------- 총잡이 결투 (키 duel · 접두어 du) ----------
+// 참가비(= cap 고정, me.bets[0])를 낸 사람들이 마주 서고, 서버가 몰래 정한 시각(DU_WAIT)에 "쏴!" 신호를 보낸다.
+// 신호 전에 쏘면 오발 = 아웃. 신호 뒤 가장 빨리 쏜 사람이 판돈 × 0.95 독식. 신호 전엔 가짜 신호(🌭 쏘세지! 등)가 0~2번 섞인다.
+// 반응 속도는 클라이언트가 신호를 받은 순간부터 잰 값(rt)을 쓴다 → 핑이 느린 사람도 공평. 서버가 잰 경과 시간보다 클 수는 없게 자른다.
+// ponytail: rt를 조작하면 DU_MIN까지는 속일 수 있다. 친구끼리 하는 게임이라 믿는다 — 문제 되면 서버 기준 시간 + 핑 보정으로 바꾼다.
+const DU_ROUNDS = 3;
+const DU_WAIT = [2500, 7000]; // 신호까지 뜸(ms)
+const DU_WINDOW = 2500; // 신호 후 쏠 수 있는 시간(ms). 전원이 쏘면 바로 끝
+const DU_MIN = 100; // 사람 반응 속도 하한(ms). 이보다 빠르면 이 값으로 친다
+const DU_EDGE = 0.95;
+const DU_FAKES = ["🌭 쏘세지!", "🙊 쏘…지 마!", "🙏 쏘리!", "🤔 쏠까?", "🥤 쏘다!"];
+const duPublic = (D) => ({ round: D.round, rounds: D.rounds, order: D.order, pot: D.pot, fouls: D.fouls, shots: D.shots, fired: D.fired, since: D.fired ? Date.now() - D.fired : 0 }); // 신호 시각(at)은 절대 안 나간다
+
+function duStart(room) {
+  const D = room.du, ps = [...room.players.values()].filter((p) => p.bets[0]);
+  if (ps.length < 2) { // 혼자서는 결투가 안 된다 → 환불하고 이 판은 무효
+    for (const p of ps) { p.money += p.bets[0]; p.bets = {}; }
+    broadcast(room, { type: "toast", text: "🤠 참가자가 2명이 안 돼서 이번 판은 무효! (참가비 환불)" });
+    return duNext(room);
+  }
+  const wait = rnd(DU_WAIT[0], DU_WAIT[1]), fakes = [];
+  for (let k = Math.floor(Math.random() * 3); k > 0; k--) fakes.push(rnd(900, wait - 500)); // 가짜 신호는 진짜보다 0.5초 이상 앞에
+  Object.assign(D, { order: ps.map((p) => p.id), pot: ps.reduce((a, p) => a + p.bets[0], 0), fouls: [], shots: {}, fired: 0 });
+  room.phase = "duWait";
+  broadcastRoom(room);
+  clearTimeout(room.timer);
+  D.fakeTimers = fakes.map((t) => setTimeout(() => room.du === D && !D.fired && broadcast(room, { type: "duCue", fake: DU_FAKES[Math.floor(Math.random() * DU_FAKES.length)] }), t));
+  room.timer = setTimeout(() => duFire(room), wait);
+}
+
+function duFire(room) {
+  const D = room.du;
+  D.fired = Date.now();
+  room.phase = "duFire";
+  broadcast(room, { type: "duCue" }); // 진짜 신호: 클라이언트는 이걸 받은 순간부터 반응 속도를 잰다
+  broadcastRoom(room);
+  room.timer = setTimeout(() => duEnd(room), DU_WINDOW);
+}
+
+function duShot(room, me, rt) {
+  const D = room.du;
+  if (!D || !D.order || !D.order.includes(me.id) || D.fouls.includes(me.id) || me.id in D.shots) return;
+  if (room.phase === "duWait") D.fouls.push(me.id); // 오발!
+  else if (room.phase === "duFire") D.shots[me.id] = Math.round(Math.max(DU_MIN, Math.min(Date.now() - D.fired, Number(rt) || Infinity))); // 서버가 잰 시간보다 빠를 수 없고, 사람 한계보다도 빠를 수 없다
+  else return;
+  broadcastRoom(room);
+  duCheck(room);
+}
+
+function duCheck(room) { // 남은 사람이 다 쐈거나(오발 포함) 방을 나갔으면 바로 끝
+  const D = room.du;
+  if (!D || (room.phase !== "duWait" && room.phase !== "duFire")) return;
+  const here = [...room.players.values()].filter((p) => D.order.includes(p.id) && !p.rcAway);
+  if (here.every((p) => D.fouls.includes(p.id) || p.id in D.shots)) duEnd(room);
+}
+
+function duEnd(room) {
+  const D = room.du, payouts = {};
+  clearTimeout(room.timer);
+  (D.fakeTimers || []).forEach(clearTimeout);
+  const ps = [...room.players.values()].filter((p) => D.order.includes(p.id)); // 나간 사람이 낸 돈은 판돈에 남는다
+  const best = Math.min(...Object.values(D.shots));
+  let winners = ps.filter((p) => D.shots[p.id] === best); // 동점이면 나눈다
+  if (!winners.length) winners = ps.filter((p) => !D.fouls.includes(p.id)); // 아무도 안 쐈으면 오발 안 낸 사람끼리 나눈다 (전원 오발이면 판돈은 하우스 몫)
+  const win = winners.length ? Math.floor((D.pot * DU_EDGE) / winners.length) : 0;
+  for (const p of ps) {
+    const bet = p.bets[0] || 0, w = winners.includes(p) ? win : 0;
+    p.money += w;
+    p.bets = {};
+    payouts[p.id] = { bet, win: w };
+  }
+  room.phase = "result";
+  room.result = { winners: winners.map((p) => p.id), shots: D.shots, fouls: D.fouls, pot: D.pot, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => duNext(room), 4500);
+}
+
+function duNext(room) { // 다음 판 참가 신청 (마지막 판이었으면 밤)
+  if (room.du.round >= room.du.rounds) return startNight(room);
+  room.du = { round: room.du.round + 1, rounds: room.du.rounds };
+  room.phase = "betting";
+  room.result = null;
+  for (const p of room.players.values()) p.ready = false;
+  broadcastRoom(room);
+  checkAllReady(room);
+}
+
+function duJoin(room, me, v) { // 참가(참가비 cap 고정) / 취소
+  if (!room.du || room.phase !== "betting" || me.ready || me.mining) return;
+  if (v && !me.bets[0] && me.money >= room.cap) { me.money -= room.cap; me.bets = { 0: room.cap }; }
+  else if (!v && me.bets[0]) { me.money += me.bets[0]; me.bets = {}; }
+  else return;
+  broadcastRoom(room);
+}
+
 // ---------- 풍선 불기 ----------
 // 크래시 게임: 공용 풍선의 배수 m(t) = e^(BL_RATE·t)가 x1.00부터 부풀고, 터지기 전에 "놓기"를 누르면 그때 배수만큼 받는다. 판돈은 me.bets[0].
 // 터지는 배수는 시작할 때 미리 뽑아 room.bl.hidden에만 둔다(broadcastRoom은 필드를 골라 보내므로 밖으로 안 나간다).
@@ -1494,6 +1594,7 @@ function leaveRoom(ws) {
   if (room.pg) pgCheckDone(room);
   if (room.ip) ipCheckDone(room); // 나간 사람만 콜/다이를 고민 중이었던 경우 (나간 사람은 다이로 친다)
   if (room.wg) wgCheck(room); // 차례인 사람이 나갔거나 1명만 남은 경우
+  if (room.du) duCheck(room); // 나간 사람만 아직 안 쐈던 경우
   if (room.bl) blCheckDone(room); // 나간 사람만 줄을 쥐고 있었던 경우
 }
 
@@ -1535,6 +1636,9 @@ function handleMessage(ws, msg) {
   if (msg.type === "bet" && room.au) return; // 경매는 밀봉 입찰(auBid)만 받는다 — me.bets는 모두에게 방송되니까
   if (msg.type === "auBid") return room.au && canBet && auBid(room, ws, me, msg.v);
   if (msg.type === "bet" && room.wg) return; // 러시안 룰렛은 참가비가 고정 → wgAct "in"으로만
+  if (msg.type === "bet" && room.du) return; // 결투도 참가비 고정 → duJoin으로만
+  if (msg.type === "duJoin") return duJoin(room, me, !!msg.v);
+  if (msg.type === "duShot") return duShot(room, me, msg.rt);
   if (msg.type === "emReact") return emReact(room, ws, me, msg.e); // 이모티콘 리액션 (방 안에서만)
 
   if (msg.type === "start") {
@@ -1555,6 +1659,7 @@ function handleMessage(ws, msg) {
     room.ip = null;
     room.au = null;
     room.wg = null;
+    room.du = null;
     room.cn = null;
     room.pk = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
@@ -2110,6 +2215,44 @@ if (process.argv.includes("--check")) {
     assert(dr.result.loser === D1.id && dr.result.payouts[D2.id].win === Math.floor(u) && dr.result.payouts[D3.id].win === Math.floor(u * 2), "연속 2발 생존자는 몫 두 배");
     delete process.env.GAME;
     rooms.delete(dr.code);
+  }
+
+  { // 총잡이 결투: 오발은 아웃, 신호 뒤 제일 빠른 사람이 독식, 신호 시각은 안 샌다
+    process.env.GAME = "duel";
+    const [a, b, c] = [wgFake(), wgFake(), wgFake()];
+    handleMessage(a, { type: "create", name: "DA" });
+    for (const w of [b, c]) handleMessage(w, { type: "join", id: a.room.code, name: "D" });
+    handleMessage(a, { type: "start" });
+    const r = a.room, [A, B, C] = [a, b, c].map((w) => r.players.get(w));
+    assert(r.game === "duel" && r.cap === 100);
+    handleMessage(a, { type: "bet", i: 0, amount: 10 });
+    assert(!A.bets[0], "결투는 칩 베팅을 안 받는다");
+    for (const w of [a, b, c]) { handleMessage(w, { type: "duJoin", v: true }); handleMessage(w, { type: "ready", v: true }); }
+    assert(r.phase === "duWait" && r.du.pot === 300 && A.money === 900);
+    handleMessage(c, { type: "duShot", rt: 150 }); // 신호 전 = 오발
+    assert(r.du.fouls[0] === C.id && r.phase === "duWait");
+    clearTimeout(r.timer); r.du.fakeTimers.forEach(clearTimeout);
+    duFire(r);
+    assert([a, b, c].every((w) => w.log.some((d) => d.includes('"duCue"'))) && ![a, b, c].some((w) => w.log.some((d) => d.includes('"at"'))));
+    r.du.fired -= 1000; // 신호 후 1초 지났다고 치고
+    handleMessage(c, { type: "duShot", rt: 50 }); // 오발한 사람은 다시 못 쏜다
+    handleMessage(b, { type: "duShot", rt: 20 }); // 100ms 밑은 100으로
+    assert(r.du.shots[B.id] === DU_MIN && !(C.id in r.du.shots));
+    r.du.fired = Date.now() - 30; // 서버 기준 30ms만 지났으면 rt가 커도 30 → 하한 100으로
+    handleMessage(a, { type: "duShot", rt: 5000 });
+    assert(r.phase === "result" && r.du.shots[A.id] === DU_MIN, "전원 쏘면 바로 끝");
+    assert(r.result.winners.length === 2 && A.money === 900 + Math.floor(300 * DU_EDGE / 2) && B.money === A.money && C.money === 900, "하한에 걸리면 동점 → 나눔");
+    clearTimeout(r.timer);
+    duNext(r);
+    for (const w of [a, b]) { handleMessage(w, { type: "duJoin", v: true }); handleMessage(w, { type: "ready", v: true }); }
+    handleMessage(c, { type: "ready", v: true }); // C는 구경
+    assert(r.phase === "duWait" && r.du.order.length === 2);
+    clearTimeout(r.timer); r.du.fakeTimers.forEach(clearTimeout);
+    duFire(r); duEnd(r); // 아무도 안 쐈다 → 둘이 나눈다
+    assert(r.result.winners.length === 2 && A.money === 1042 - 100 + Math.floor(200 * DU_EDGE / 2));
+    clearTimeout(r.timer);
+    delete process.env.GAME;
+    rooms.delete(r.code);
   }
 
   // 풍선 불기: crash 분포(P(crash ≥ m) = 0.95/m) + 짜고 친 한 판 (A는 x1.5에 놓고, B는 쥐고 있다가 x2.5에서 펑) + crash가 미리 새지 않는지

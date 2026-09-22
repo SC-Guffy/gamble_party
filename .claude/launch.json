@@ -1,6 +1,25 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "derby", "runtimeExecutable": "node", "runtimeArgs": ["server.js"], "port": 3100, "autoPort": true }
+    {
+      "name": "derby",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server.js"
+      ],
+      "port": 3100,
+      "autoPort": true
+    },
+    {
+      "name": "duel-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=duel",
+        "PORT=3111",
+        "node",
+        "server.js"
+      ],
+      "port": 3111
+    }
   ]
 }

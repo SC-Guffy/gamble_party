@@ -31,6 +31,39 @@
         "server.js"
       ],
       "port": 3112
+    },
+    {
+      "name": "dodge-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=dodge",
+        "PORT=3113",
+        "node",
+        "server.js"
+      ],
+      "port": 3113
+    },
+    {
+      "name": "armwrestle-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=armwrestle",
+        "PORT=3114",
+        "node",
+        "server.js"
+      ],
+      "port": 3114
+    },
+    {
+      "name": "rhythm-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=rhythm",
+        "PORT=3115",
+        "node",
+        "server.js"
+      ],
+      "port": 3115
     }
   ]
 }

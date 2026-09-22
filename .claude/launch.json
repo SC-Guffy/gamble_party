@@ -20,6 +20,17 @@
         "server.js"
       ],
       "port": 3111
+    },
+    {
+      "name": "rhythm-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=rhythm",
+        "PORT=3115",
+        "node",
+        "server.js"
+      ],
+      "port": 3115
     }
   ]
 }

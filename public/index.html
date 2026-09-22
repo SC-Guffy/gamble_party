@@ -232,13 +232,21 @@
   #au-note b{color:#161320;background:var(--gold);border-radius:8px;padding:4px 10px;font-size:13.5px}
   #au-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
   /* 러시안 룰렛(wg): 참가비가 고정이라 칩 대신 참가 버튼, 차례엔 당기기/넘기기 + 남은 시간 막대 */
-  #wg-join{display:none} #panel-bet:is(.wg-on,.du-on) #wg-join{display:flex} #panel-bet:is(.wg-on,.du-on) #chips{display:none}
+  #wg-join{display:none} #panel-bet:is(.wg-on,.du-on,.rh-on) #wg-join{display:flex} #panel-bet:is(.wg-on,.du-on,.rh-on) #chips{display:none}
   /* 총잡이 결투(du): 참가 버튼은 룰렛 것을 같이 쓰고, 결투 중엔 커다란 발사 버튼 하나 */
   #du-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
   #du-shoot{font-family:var(--font-display);font-size:22px;border:none;border-radius:18px;padding:26px 6px;cursor:pointer;color:#fff;background:var(--bad);box-shadow:0 7px 0 #a93246;touch-action:manipulation}
   #du-shoot small{display:block;font-family:var(--font-body);font-weight:600;font-size:12px;opacity:.8;margin-top:6px}
   #du-shoot:disabled{opacity:.35;cursor:not-allowed}
   #du-shoot:not(:disabled):active{transform:translateY(5px);box-shadow:none}
+  /* 박자 피하기(rh): 참가 버튼은 룰렛 것을 같이 쓰고, 도중엔 점프/숙이기 버튼 둘 */
+  #rh-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  #rh-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  #rh-actions button{font-family:var(--font-display);font-size:20px;border:none;border-radius:18px;padding:22px 6px;cursor:pointer;color:#161320;touch-action:manipulation;user-select:none}
+  #rh-actions button small{display:block;font-family:var(--font-body);font-weight:600;font-size:12px;opacity:.75;margin-top:4px}
+  #rh-jump{background:var(--gold);box-shadow:0 7px 0 var(--gold-shade)} #rh-duck{background:#7fe9ff;box-shadow:0 7px 0 #3fa8c0}
+  #rh-actions button:disabled{opacity:.35;cursor:not-allowed}
+  #rh-actions button:not(:disabled):active{transform:translateY(5px);box-shadow:none}
   #wg-btn-in{padding:13px 22px}
   #wg-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
   #wg-time{height:8px;border-radius:4px;background:var(--panel-edge);overflow:hidden}
@@ -506,6 +514,13 @@
       <div id="du-panel" hidden>
         <div id="du-hint"></div>
         <button id="du-shoot">🔫 쏴!<small>신호가 뜨면 누르세요 (스페이스)</small></button>
+      </div>
+      <div id="rh-panel" hidden>
+        <div id="rh-hint"></div>
+        <div id="rh-actions">
+          <button id="rh-jump">⬆ 점프<small>🪵 통나무 (W / ↑)</small></button>
+          <button id="rh-duck">⬇ 숙이기<small>🔨 가시 봉 (S / ↓)</small></button>
+        </div>
       </div>
       <div id="bl-panel" hidden>
         <div id="bl-hint"></div>
@@ -872,6 +887,7 @@
   const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","duWait","duFire","blCount","blFly","cnMarket","pkDrop"];
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
+    if(room && room.phase === "rhPlay") return; // 박자 피하기: 게임이 직접 박자(메트로놈+베이스)를 친다
     const hot = room && HOT_PHASES.includes(room.phase), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
     if(bgmNext < actx.currentTime) bgmNext = actx.currentTime+0.05; // 처음이거나 탭이 숨겨졌다 돌아온 경우
     while(bgmNext < actx.currentTime+0.3){
@@ -987,6 +1003,7 @@
     if(rcOnMessage(msg)) return; // 재접속
     if(msg.type === "emReact") return emFly(msg); // 이모티콘 리액션
     if(msg.type === "duCue") return duOnCue(msg); // 결투: 진짜/가짜 신호
+    if(msg.type === "rhAct") return rhOnAct(msg); // 박자 피하기: 남의 점프/숙이기
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -1035,6 +1052,8 @@
     if(wg) wgOnRoom(r); // 새 판이면 장면 초기화 + 차례 제한 시간 동기화
     const du = r.game === "duel";
     if(du) duOnRoom(r);
+    const rh = r.game === "rhythm";
+    if(rh) rhOnRoom(r);
     const bl = r.game === "balloon";
     const cn = r.game === "coin";
     if(cn && r.phase === "cnMarket" && prev !== "cnMarket"){ setOverlay("🔔 장 시작!", 900); sfxGo(); }
@@ -1079,6 +1098,8 @@
     $("panel-bet").classList.toggle("wg-on", wg); // 러시안 룰렛: 칩 대신 참가 버튼 (CSS)
     $("panel-bet").classList.toggle("du-on", du); // 결투도 참가비 고정 → 같은 참가 버튼
     $("du-panel").hidden = !du || (r.phase !== "duWait" && r.phase !== "duFire");
+    $("panel-bet").classList.toggle("rh-on", rh); // 박자 피하기도 참가비 고정 → 같은 참가 버튼
+    $("rh-panel").hidden = !rh || r.phase !== "rhPlay";
     $("bl-panel").hidden = !bl || !["blCount","blFly","blPop"].includes(r.phase);
     if(bl) blOnRoom(prev);
     $("cn-panel").hidden = !cn || (r.phase !== "cnMarket" && r.phase !== "cnClose");
@@ -1098,6 +1119,7 @@
       auction: renderAu,
       watergun: renderWg,
       duel: renderDu,
+      rhythm: renderRh,
       balloon: renderBl,
       coin: renderCn,
       plinko: renderPk,
@@ -1172,6 +1194,7 @@
     if(room.au && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 경매 " + room.au.round + "/" + room.au.rounds + "판";
     if(room.wg && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 러시안 룰렛 " + room.wg.round + "/" + room.wg.rounds + "판";
     if(room.du && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 결투 " + room.du.round + "/" + room.du.rounds + "판";
+    if(room.rh && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 박자 피하기 " + room.rh.round + "/" + room.rh.rounds + "판";
     if(room.bl && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 풍선 " + room.bl.round + "/" + room.bl.rounds + "판";
     if(room.cn && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 코인 단타 " + room.cn.round + "/" + room.cn.rounds + "판";
     if(room.pk && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 플링코 " + room.pk.round + "/" + room.pk.rounds + "판";
@@ -1347,6 +1370,18 @@
           (o ? '<span class="tag'+(p.id === res.loser ? " bad" : "")+'">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
       }).join("");
       if(mine && mine.win > mine.bet){ sfxWin(); confetti(70); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
+    if(room.rh){
+      const Hs = room.rh, ws = res.winners.map((id) => (room.players.find((p) => p.id === id) || {name:"떠난 손님"}).name), t = res.winners.length && res.times[res.winners[0]], sec = (ms) => (ms/1000).toFixed(1)+"초";
+      $("result-next").textContent = Hs.round < Hs.rounds ? "곧 다음 판 참가 신청이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+      $("result-title").textContent = t >= res.len ? "🏁 " + ws.join(" · ") + " 끝까지 생존!" : "🥁 " + ws.join(" · ") + " 승! (" + sec(t) + " 버팀)";
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, tm = res.times[p.id], tag = tm >= res.len ? "🏁 완주" : (res.winners.includes(p.id) ? "🏆 " : "🔥 ") + sec(tm || 0);
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag'+(res.winners.includes(p.id) ? "" : " bad")+'">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(90); } else if(mine && mine.win < mine.bet) sfxLose();
       return;
     }
     if(room.du){
@@ -2618,7 +2653,7 @@
       can ? "💥 내 차례! 남은 " + G.k + "칸 중 1칸에 총알 — 당길까, 넘길까?" : (G.order.includes(myId) ? "" : "구경 중 · ") + name + " 차례… (총알 확률 1/" + G.k + ")";
   }
   const wgSend = (a) => { ensureAudio(); document.activeElement.blur(); sendMsg({type:"wgAct", a:a}); }; // blur: 스페이스가 방금 누른 버튼을 또 누르지 않게
-  $("wg-btn-in").addEventListener("click", () => { sfxChip(); if(room.du) return sendMsg({type:"duJoin", v:!me().bets[0]}); wgSend(me().bets[0] ? "out" : "in"); }); // 결투도 이 참가 버튼을 같이 쓴다
+  $("wg-btn-in").addEventListener("click", () => { sfxChip(); if(room.du) return sendMsg({type:"duJoin", v:!me().bets[0]}); if(room.rh) return sendMsg({type:"rhJoin", v:!me().bets[0]}); wgSend(me().bets[0] ? "out" : "in"); }); // 결투도 이 참가 버튼을 같이 쓴다
   $("wg-btn-pull").addEventListener("click", () => wgSend("pull"));
   $("wg-btn-pass").addEventListener("click", () => wgSend("pass"));
   $("wg-btn-double").addEventListener("click", () => wgSend("double"));
@@ -2858,6 +2893,261 @@
     if(D.pot) pill(g, W/2, H*0.5+18*u, "판돈 $"+D.pot, "rgba(11,10,19,.8)", "#ffdd7a", clamp(u*3.6, 10, 13));
     stepParticles(dt, null);
     if(flashT < 0.15){ g.fillStyle = "rgba(255,255,255,"+(0.6*(1-flashT/0.15))+")"; g.fillRect(-20,-20,W+40,H+40); }
+    g.restore();
+  }
+
+  // ---------- 박자 피하기 (키 rhythm · 접두어 rh) ----------
+  // 서버는 시드만 준다 → rhPattern(시드)로 모두가 같은 패턴을 재생한다. 내가 맞았는지는 여기서 판정해 맞은 장애물의 도착 시각을 rhDie로 보고.
+  // 시계 el(ms) = 시작(0ms) 기준 경과, 판마다 처음 받은 since로 한 번만 맞춘다(음수 = 카운트다운).
+  // rhV = {key, base(performance 기준 0ms), P 패턴, next 판정할 장애물, act {id: {s 시작 el, a 0 점프/1 숙이기}}, fly {id: 날아가기 시작한 el}, splash {id}, beat 소리 낸 박, warn 경고음 낸 장애물}
+  // server.js의 rhPattern과 같아야 한다 (--check가 둘을 비교한다)
+  function rhPattern(seed, C) {
+    let s = seed >>> 0;
+    const rng = () => { s = (s + 0x6d2b79f5) >>> 0; let x = Math.imul(s ^ (s >>> 15), 1 | s); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; // mulberry32
+    const beats = [], obs = [];
+    let last = -1e9;
+    for (let t = 2000; t < C.len; ) {
+      const p = t / C.len, beat = 60000 / (C.bpm[0] + (C.bpm[1] - C.bpm[0]) * p);
+      beats.push(Math.round(t));
+      if (t - last >= C.gap && rng() < 0.5 + 0.35 * p) {
+        const k = rng() < 0.5 ? 0 : 1, f = p > 0.2 && rng() < 0.18;
+        last = t + (f ? beat : 0);
+        obs.push({ t: Math.round(last), k, f });
+        if (!f && p > 0.3 && rng() < 0.35) { last += C.gap; obs.push({ t: Math.round(last), k: 1 - k, f: false }); }
+      }
+      t += beat;
+    }
+    return { beats, obs: obs.filter((o) => o.t < C.len) };
+  }
+  // rhPattern 끝
+  let rhV = null;
+  const rhBeat = (C, t) => 60000/(C.bpm[0]+(C.bpm[1]-C.bpm[0])*clamp(t/C.len,0,1)); // 그 시각의 한 박(ms)
+  const rhEl = () => rhV ? performance.now()-rhV.base : 0;
+  function rhOnRoom(r){
+    const key = r.code+":"+r.day+":"+r.rh.round;
+    if(!rhV || rhV.key !== key) rhV = {key:key, base:null, P:null, next:0, act:{}, fly:{}, splash:{}, beat:0, warn:0};
+    if(r.rh.seed != null && !rhV.P){ rhV.P = rhPattern(r.rh.seed, r.rh.cfg); rhV.base = performance.now()-r.rh.since; }
+    for(const id in (r.rh.dead || {})) if(rhV.fly[id] == null) rhV.fly[id] = Math.max(r.rh.dead[id], rhEl()-150); // 남이 맞은 건 보고가 온 지금부터 날린다
+  }
+  function rhOnAct(msg){ if(rhV && rhV.P && msg.id !== myId) rhV.act[msg.id] = {s:rhEl(), a:msg.a}; }
+  const rhIn = () => room && room.rh && room.phase === "rhPlay" && rhV && rhV.P && room.rh.order.includes(myId) && rhV.fly[myId] == null && !(myId in room.rh.dead);
+  function rhPress(a){
+    if(!rhIn()) return;
+    const el = rhEl(), C = room.rh.cfg, m = rhV.act[myId];
+    if(m && el-m.s < C.cd) return; // 쿨다운: 연타로는 못 버틴다
+    ensureAudio();
+    rhV.act[myId] = {s:el, a:a};
+    tone(a ? 300 : 520, 0.09, "triangle", 0.12, a ? 200 : 780);
+    sendMsg({type:"rhAct", a:a});
+    renderRh();
+  }
+  function rhJudge(){ // 도착 시각이 지난 장애물마다: 그 순간 맞는 동작(통나무 = 점프, 봉 = 숙이기) 중이었나
+    if(!rhIn()) return;
+    const el = rhEl(), C = room.rh.cfg, O = rhV.P.obs;
+    while(rhV.next < O.length && O[rhV.next].t <= el){
+      const o = O[rhV.next++], m = rhV.act[myId];
+      if(m && m.a === o.k && m.s <= o.t && o.t <= m.s+C.act) continue;
+      rhV.fly[myId] = el; rhV.hitK = o.k;
+      sendMsg({type:"rhDie", t:o.t});
+      setOverlay(o.k ? "🔨 퍽!" : "🪵 쾅!", 1100); sfxLose();
+      return renderRh();
+    }
+  }
+  function renderRh(){
+    const my = me(), H = room.rh, betting = room.phase === "betting", joined = !!my.bets[0];
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : joined ? "준비 완료" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const bi = $("wg-btn-in");
+    bi.hidden = my.mining; bi.disabled = !betting || my.ready || (!joined && my.money < room.cap);
+    bi.textContent = joined ? "참가 취소 (+$"+room.cap+")" : "발판에 서기 🥁 −$"+room.cap;
+    bi.classList.toggle("on", joined);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    if(betting) $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "🥁 " + H.round + "/" + H.rounds + "판 · 참가비 $" + room.cap + " 고정 · 🪵 통나무는 점프(W/↑), 🔨 봉은 숙이기(S/↓)! 가장 오래 버틴 사람이 판돈의 95% 독식 (2명 이상 참가해야 시작)" + (!joined && my.money < room.cap ? " · 돈이 모자라 구경만 할 수 있어요" : "");
+    if(betting || !H.order) return;
+    const inGame = H.order.includes(myId), out = rhV && rhV.fly[myId] != null || myId in H.dead;
+    $("rh-jump").disabled = $("rh-duck").disabled = !rhIn();
+    $("rh-hint").textContent = !inGame ? "구경 중 · 누가 끝까지 버틸까? 🍿" : out ? "🔥 용암에 풍덩… 남은 사람을 응원하세요" : "박자에 맞춰! 경고가 뜨고 한 박 뒤에 도착해요";
+  }
+  $("rh-jump").addEventListener("pointerdown", (e) => { e.preventDefault(); rhPress(0); }); // click보다 빠르게
+  $("rh-duck").addEventListener("pointerdown", (e) => { e.preventDefault(); rhPress(1); });
+  window.addEventListener("keydown", (e) => {
+    if(!room || !room.rh || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if(e.code === "KeyW" || e.key === "ArrowUp"){ e.preventDefault(); rhPress(0); }
+    if(e.code === "KeyS" || e.key === "ArrowDown"){ e.preventDefault(); rhPress(1); }
+  });
+  // 장면: 벽돌 던전 벽 + 횃불, 가운데 벽돌 발판 위에 참가자들이 한 줄로 서 있고 앞·옆은 용암.
+  // 🪵 가시 통나무는 발판 안쪽에서 굴러 나와 발밑을 쓸고, 🔨 가시 봉은 천장 사슬에 매달려 머리 높이로 휘둘러 온다. 둘 다 앞 용암으로 떨어진다.
+  function rhLog(g, x0, x1, cy, r, rot, u, a){ // 가로로 누운 가시 통나무 (앞으로 구르면 무늬·가시가 위에서 아래로 돈다)
+    g.globalAlpha = a;
+    g.fillStyle = "#4a2a14"; g.fillRect(x0-u, cy-r, x1-x0+2*u, 2*r);
+    const grd = g.createLinearGradient(0, cy-r, 0, cy+r); grd.addColorStop(0,"#b07a44"); grd.addColorStop(0.45,"#8a5a2e"); grd.addColorStop(1,"#4a2a14");
+    g.fillStyle = grd; g.fillRect(x0, cy-r, x1-x0, 2*r);
+    g.fillStyle = "rgba(40,20,8,.55)";
+    for(let k=0;k<5;k++){ const an = rot+k*T/5; if(Math.cos(an) > 0) g.fillRect(x0, cy+r*S(an)-0.3*u, x1-x0, 0.6*u); } // 나무결
+    g.fillStyle = "#6b3f1f"; g.fillRect(x0-1.2*u, cy-r*0.92, 1.8*u, r*1.84); g.fillRect(x1-0.6*u, cy-r*0.92, 1.8*u, r*1.84); // 끝마구리
+    const L = r*0.7;
+    for(let x = x0+4*u; x < x1-2*u; x += 7*u) for(let k=0;k<6;k++){
+      const an = rot+k*T/6+(x/u)*0.35, c = Math.cos(an), sn = S(an);
+      if(c < -0.15) continue;
+      const by = cy+r*sn, ty = cy+(r+L)*sn;
+      g.fillStyle = c > 0.8 ? "#eef0f4" : "#aeb3bf";
+      if(Math.abs(sn) < 0.35){ g.beginPath(); g.moveTo(x, by-0.9*u); g.lineTo(x+0.9*u, by); g.lineTo(x, by+0.9*u); g.lineTo(x-0.9*u, by); g.fill(); } // 정면을 보는 가시
+      else { g.beginPath(); g.moveTo(x-0.8*u, by); g.lineTo(x+0.8*u, by); g.lineTo(x, ty); g.fill(); }
+    }
+    g.globalAlpha = 1;
+  }
+  function rhBar(g, x0, x1, cy, r, rot, u, a, blur){ // 사슬에 매달린 가시 봉
+    g.globalAlpha = a;
+    g.strokeStyle = "#6d6a78"; g.lineWidth = Math.max(1.5, u*0.5); g.setLineDash([u*1.2, u*0.6]);
+    for(const x of [x0+6*u, x1-6*u]){ g.beginPath(); g.moveTo(x, -10); g.lineTo(x, cy); g.stroke(); }
+    g.setLineDash([]);
+    if(blur){ g.fillStyle = "rgba(255,255,255,.18)"; for(let k=1;k<=3;k++) g.fillRect(x0, cy-r-k*blur*0.35, x1-x0, 1.2); } // 휘두르는 잔상
+    g.fillStyle = "#3d3a48"; g.fillRect(x0, cy-r, x1-x0, 2*r);
+    g.fillStyle = "#8b8898"; g.fillRect(x0, cy-r, x1-x0, r*0.6);
+    for(let x = x0+3*u; x < x1-u; x += 5*u) for(let k=0;k<4;k++){
+      const an = rot+k*T/4+(x/u)*0.5, c = Math.cos(an), sn = S(an);
+      if(c < -0.1) continue;
+      g.fillStyle = c > 0.7 ? "#fff" : "#c4c8d2";
+      g.beginPath(); g.moveTo(x-0.7*u, cy+r*sn); g.lineTo(x+0.7*u, cy+r*sn); g.lineTo(x, cy+(r+2.2*u)*sn); g.fill();
+    }
+    g.globalAlpha = a;
+    g.fillStyle = "#c9a24a"; g.fillRect(x0-u, cy-r*1.4, 2*u, r*2.8); g.fillRect(x1-u, cy-r*1.4, 2*u, r*2.8); // 쇠고리
+    g.globalAlpha = 1;
+  }
+  function drawRh(ts, dt){
+    const g = ctx, now = ts/1000, Hs = room.rh, V = rhV, res = room.phase === "result" && room.result;
+    if(!V) return;
+    const play = room.phase === "rhPlay" && V.P, el = V.P ? rhEl() : 0, C = Hs.cfg;
+    rhJudge();
+    const u = clamp(H/95, 2, 3.6), backY = H*0.42, feetY = H*0.72, frontY = H*0.8, px0 = W*0.05, px1 = W*0.95, beatMs = rhBeat(C, el);
+    // 박마다 펄스 + 메트로놈 (오디오 시계로 미리 예약해 정확히 박에 맞춘다)
+    let lastBeat = -1e9;
+    if(V.P){
+      const B = V.P.beats;
+      for(const b of B){ if(b <= el) lastBeat = b; else break; }
+      while(play && V.beat < B.length && B[V.beat]-el < 120){
+        const b = B[V.beat], d = Math.max(0, (b-el)/1000), acc = V.beat%4 === 0;
+        if(b > el-60){ tone(acc ? 150 : 110, 0.14, "sine", 0.3, 40, d); if(actx) drum(actx.currentTime+d, 0.03, acc ? 0.07 : 0.04, 7000); tone([110,110,131,147][Math.floor(V.beat/4)%4]*(V.beat%2 ? 2 : 1), 0.16, "triangle", 0.07, null, d); }
+        V.beat++;
+      }
+    }
+    const pulse = play && el > 0 ? Math.exp(-(el-lastBeat)/140) : 0;
+    const hitT = V.fly[myId] != null ? (el-V.fly[myId])/1000 : 9;
+    g.save();
+    if(hitT < 0.3) g.translate((R()-0.5)*14*(1-hitT/0.3), (R()-0.5)*14*(1-hitT/0.3));
+    g.translate(W/2, H/2); g.scale(1+0.012*pulse, 1+0.012*pulse); g.translate(-W/2, -H/2);
+    // 용암 (발판 아래 전체)
+    const lava = g.createLinearGradient(0, backY, 0, H); lava.addColorStop(0,"#ff7a1a"); lava.addColorStop(0.5,"#e0391c"); lava.addColorStop(1,"#8a1410");
+    g.fillStyle = lava; g.fillRect(-20, backY, W+40, H-backY+20);
+    g.fillStyle = "rgba(255,221,100,"+(0.35+0.3*pulse)+")";
+    for(let k=0;k<14;k++){ const x = (k*97.3+now*(k%2 ? 14 : -10))%(W+40)-20, y = frontY+H*0.04+((k*53)%7)*H*0.018, r = u*(1.2+((k*31)%5)*0.4)*(0.6+0.4*S(now*3+k)); g.beginPath(); g.ellipse(x, y, r*2, r*0.7, 0, 0, T); g.fill(); } // 일렁이는 용암 거품
+    if(R() < dt*6) emit(null, frontY+H*0.03+R()*H*0.12, {x:R()*W, fire:1, vy:-30-R()*40, life:0.5+R()*0.4, w:u*(1+R()), grow:-u*1.5});
+    // 던전 벽 (벽돌 + 횃불)
+    g.fillStyle = "#2b2233"; g.fillRect(-20,-20,W+40,backY+20);
+    const bw = 12*u, bh = 5*u;
+    g.fillStyle = "#3a2f45";
+    for(let y=0, row=0; y < backY; y += bh, row++) for(let x = -(row%2)*bw/2; x < W; x += bw) g.fillRect(x+0.5*u, y+0.5*u, bw-u, bh-u);
+    for(const tx of [W*0.14, W*0.86]){
+      const ty = backY*0.45, fl = 1+0.15*S(now*17+tx)+0.4*pulse;
+      const glow = g.createRadialGradient(tx, ty, 1, tx, ty, 26*u*fl); glow.addColorStop(0,"rgba(255,170,70,.45)"); glow.addColorStop(1,"rgba(255,170,70,0)");
+      g.fillStyle = glow; g.fillRect(tx-30*u, ty-30*u, 60*u, 60*u);
+      g.fillStyle = "#5a3820"; g.fillRect(tx-0.8*u, ty, 1.6*u, 6*u);
+      if(R() < dt*25) emit(null, ty-u, {x:tx+(R()-0.5)*u, fire:1, vy:-25-R()*30, vx:(R()-0.5)*10, life:0.35+R()*0.25, w:u*(1.4+R()), grow:-u*3});
+    }
+    // 벽돌 발판 (윗면 + 앞면)
+    g.fillStyle = "#6e6475"; g.fillRect(px0, backY, px1-px0, frontY-backY);
+    g.fillStyle = "#857a8c";
+    for(let y=backY, row=0; y < frontY; row++){ const h2 = (3+row*0.9)*u, w2 = h2*2.4; for(let x = px0-(row%2)*w2/2; x < px1; x += w2){ const xa = Math.max(px0, x+0.4*u), xb = Math.min(px1, x+w2-0.4*u); if(xb > xa) g.fillRect(xa, y+0.4*u, xb-xa, Math.min(h2, frontY-y)-0.8*u); } y += h2; }
+    g.fillStyle = "rgba(255,120,40,"+(0.12+0.25*pulse)+")"; g.fillRect(px0, frontY-2*u, px1-px0, 2*u); // 박마다 달아오르는 앞 모서리
+    g.fillStyle = "#4a4150"; g.fillRect(px0, frontY, px1-px0, 5*u);
+    g.fillStyle = "#3a3240"; for(let x=px0; x<px1; x+=10*u) g.fillRect(x, frontY, 0.6*u, 5*u);
+    // 장애물 (이미 지나간 건 용암으로 떨어진다). 페이크는 한 박 동안 멈칫(q 고정)했다가 온다
+    const obsList = [];
+    if(play) for(const o of V.P.obs){
+      const b = rhBeat(C, o.t), tt = o.t-el, virt = !o.f ? tt : tt < 0.8*b ? tt : tt < 1.8*b ? 0.8*b : tt-b;
+      if(virt > 2*b || tt < -1.2*b) continue;
+      obsList.push({o, b, tt, virt, q:1-virt/(2*b)});
+    }
+    const warn = obsList.filter((x) => x.virt <= x.b && x.virt > 0 && play).sort((a,b2) => a.virt-b2.virt)[0];
+    for(const x of obsList){ // 경고음: 도착 한 박 전
+      if(play && x.virt <= x.b && x.o.t > (V.warn||0)){ V.warn = x.o.t; tone(x.o.k ? 1318 : 392, 0.1, "square", 0.08, x.o.k ? 1568 : 330); }
+    }
+    const logs = obsList.filter((x) => x.o.k === 0), bars = obsList.filter((x) => x.o.k === 1);
+    const drawObs = (x) => {
+      const q = x.q, far = clamp(q, 0, 1), s = 0.55+0.45*far, fade = q > 1 ? clamp(1-(q-1)*1.6, 0, 1) : clamp(q*4, 0, 1);
+      const w0 = (px1-px0)*(0.8+0.2*far), x0 = W/2-w0/2, x1 = W/2+w0/2;
+      if(x.o.k === 0){
+        const r = 4*u*s, bot = q <= 1 ? backY+(feetY-backY)*q : feetY+(frontY-feetY)*(q-1)*2.5+(q > 1.4 ? (q-1.4)*H*1.2 : 0);
+        rhLog(g, x0, x1, bot-r, r, -q*T*1.6, u*s, fade);
+      } else {
+        const headY = feetY-15*u, r = 1.3*u*s, cy = q <= 1 ? backY-24*u+(headY-backY+24*u)*q*q : headY-(q-1)*H*0.8;
+        rhBar(g, x0, x1, cy, r, now*8, u*s, fade, q > 0.6 && q < 1.3 ? 6*u : 0);
+      }
+    };
+    for(const x of logs) if(x.q < 1) drawObs(x); // 앞사람보다 뒤에 있는 통나무
+    // 사람들: 참가자는 발판 위 한 줄, 구경꾼은 뒤 벽 앞 턱에
+    const order = Hs.order || room.players.filter((p) => p.bets[0]).map((p) => p.id);
+    const onDeck = room.players.filter((p) => order.includes(p.id)), watchers = room.players.filter((p) => !order.includes(p.id));
+    watchers.forEach((p, i) => {
+      const x = W*(i+1)/(watchers.length+1), y = backY-u;
+      g.globalAlpha = 0.6; drawPerson(g, p.look, x, y, u*0.6, p.mining ? "mine" : "idle", now, i*1.3); g.globalAlpha = 1;
+      personLabel(g, p, x, y-14*u, 10, [[p.name, PCOL[p.color]], [room.phase === "betting" && !p.ready ? "고민 중" : "구경", "#a7a2c4"]]);
+    });
+    onDeck.forEach((p, i) => {
+      const bx = W*(i+1)/(onDeck.length+1), pay = res && res.payouts[p.id], win = res && res.winners.includes(p.id);
+      const fly = V.fly[p.id], m = V.act[p.id], f = m ? (el-m.s)/C.act : 9;
+      if(fly != null){ // 맞으면 튕겨 나가 용암에 풍덩
+        const ft = (el-fly)/1000, dir = i < onDeck.length/2 ? -1 : 1, sy = frontY+H*0.08;
+        if(ft < 0.85){
+          const x = bx+dir*ft*W*0.12, y = feetY-S(ft/0.85*PI)*H*0.22+(sy-feetY)*(ft/0.85);
+          g.save(); g.translate(x, y-10*u); g.rotate(dir*ft*9); g.translate(-x, -(y-10*u)); drawPerson(g, p.look, x, y, u, "sad", now, i*1.7); g.restore();
+          if(R() < dt*30) emit(null, y-8*u, {x:x, star:1, color:"#ffdd7a", vx:(R()-0.5)*60, vy:-30, life:0.4, w:u*1.2, spin:8});
+        } else if(!V.splash[p.id]){
+          V.splash[p.id] = 1;
+          const x = bx+dir*0.85*W*0.12;
+          burst(34, null, sy, (dx,dy) => ({x:x, fire:1, vx:dx*150, vy:-Math.abs(dy)*260-60, g:420, life:0.6+R()*0.5, w:u*(1.5+R()*2), grow:-u*2, spin:5}));
+          emit(null, sy, {x:x, ring:1, w:u*3, grow:u*70, life:0.45, color:"#ffdd7a"});
+          tone(90, 0.5, "sawtooth", 0.18, 40); if(actx) drum(actx.currentTime, 0.35, 0.3, 300);
+        }
+        if(ft >= 0.85) personLabel(g, p, bx+dir*0.85*W*0.12, sy-4*u, 11, [[p.name, PCOL[p.color]], ["🔥 "+((Hs.dead[p.id] ?? (fly|0))/1000).toFixed(1)+"초", "#ff8a3a"]]);
+        return;
+      }
+      let y = feetY, sq = 1;
+      if(m && f >= 0 && f <= 1){ if(m.a === 0) y -= S(f*PI)*13*u; else sq = 0.5+0.5*Math.pow(Math.abs(2*f-1), 3); } // 점프 포물선 / 쪼그려 숙이기
+      g.save(); g.translate(bx, y); g.scale(sq < 1 ? 1+(1-sq)*0.3 : 1, sq); g.translate(-bx, -y);
+      drawPerson(g, p.look, bx, y, u, p.mining ? "mine" : win ? "cheer" : pay && pay.win < pay.bet ? "sad" : "idle", now, i*1.7);
+      g.restore();
+      if(y < feetY){ g.fillStyle = "rgba(0,0,0,.25)"; g.beginPath(); g.ellipse(bx+u, feetY-u*0.6, 4*u, 1.1*u, 0, 0, T); g.fill(); }
+      const lines = [[p.name, PCOL[p.color]], ["$"+p.money, "#ffdd7a"]];
+      if(win) lines.push(["🏆 "+(res.times[p.id]/1000).toFixed(1)+"초", "#7bd88f"]);
+      else if(pay) lines.push([(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"]);
+      else if(room.phase === "betting") lines.push(["🥁 참가", "#ffb070"]);
+      personLabel(g, p, bx, y-(21*sq+1)*u, 11, lines);
+    });
+    for(const x of logs) if(x.q >= 1) drawObs(x); // 지나간 통나무는 사람 앞으로
+    for(const x of bars) drawObs(x); // 봉은 머리 위로 지나간다
+    // 경고: 도착 한 박 전부터 가운데 위에 무엇을 할지 + 줄어드는 박자 링
+    if(warn){
+      const k = warn.o.k, fr = clamp(warn.virt/warn.b, 0, 1), frozen = warn.o.f && warn.tt >= 0.8*warn.b && warn.tt < 1.8*warn.b;
+      const cx = W/2, cy = H*0.17, fs = clamp(H*0.07, 16, 38);
+      g.strokeStyle = k ? "#7fe9ff" : "#ffdd7a"; g.lineWidth = 4; g.beginPath(); g.arc(cx, cy, fs*1.1+fs*1.4*fr, 0, T); g.stroke();
+      g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
+      const txt = frozen ? "…멈칫?" : k ? "⬇ 숙여!" : "⬆ 점프!", jx = frozen ? S(now*50)*3 : 0;
+      g.lineWidth = 6; g.strokeStyle = "#161320"; g.strokeText(txt, cx+jx, cy); g.fillStyle = frozen ? "#ff5d72" : k ? "#7fe9ff" : "#ffdd7a"; g.fillText(txt, cx+jx, cy);
+    }
+    // 카운트다운 / 진행 시간
+    const fs2 = clamp(H*0.12, 24, 70);
+    if(play && el < 0){
+      g.font = "800 "+fs2+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineWidth = 7; g.strokeStyle = "#161320"; g.fillStyle = "#fff";
+      const n = Math.ceil(-el/1000); g.strokeText(String(n), W/2, H*0.25); g.fillText(String(n), W/2, H*0.25);
+      if(V.cd !== n){ V.cd = n; tone(660, 0.12, "square", 0.1); }
+    }
+    if(room.phase === "betting"){ g.font = "800 "+fs2*0.45+"px Rubik, sans-serif"; g.textAlign = "center"; g.lineWidth = 6; g.strokeStyle = "#161320"; g.fillStyle = "#fff"; g.strokeText("🥁 발판에 설 사람 모집 중", W/2, H*0.2); g.fillText("🥁 발판에 설 사람 모집 중", W/2, H*0.2); }
+    if(Hs.pot) pill(g, W/2, frontY+9*u, (play ? "⏱ "+(clamp(el,0,C.len)/1000).toFixed(1)+"s / "+C.len/1000+"s · ♩="+Math.round(60000/beatMs)+" · 생존 "+onDeck.filter((p) => V.fly[p.id] == null && !(p.id in Hs.dead)).length+"명 · " : "")+"판돈 $"+Hs.pot, "rgba(11,10,19,.8)", "#ffdd7a", clamp(u*3.6, 10, 13));
+    stepParticles(dt, null);
     g.restore();
   }
 
@@ -3523,6 +3813,7 @@
     auction:   {name:"미스터리 상자 경매", icon:"🎁", sub:"하루 3판 · 밀봉 입찰로 상자를 낙찰"},
     watergun:  {name:"러시안 룰렛", icon:"💥", sub:"하루 3판 · 6발 중 1발이 진짜"},
     duel:      {name:"총잡이 결투", icon:"🤠", sub:"하루 3판 · 신호 뜨면 먼저 쏴라"},
+    rhythm:    {name:"박자 피하기", icon:"🥁", sub:"하루 3판 · 박자 맞춰 점프·숙이기"},
     balloon:   {name:"풍선 불기", icon:"🎈", sub:"하루 3판 · 터지기 전에 놓아라"},
     coin:      {name:"도박 코인 단타", icon:"🪙", sub:"하루 3판 · 30초 단타 매매"},
     plinko:    {name:"플링코", icon:"🔴", sub:"하루 3판 · 공이 떨어질 구역을 맞혀라"},
@@ -3629,6 +3920,15 @@
       const u = Math.min(w/34, h/70), ph = now%2, up = ph > 1 && ph < 1.6, a = up ? -0.25 : PI*0.4;
       g.save(); g.translate(w/2, h*0.42); g.rotate(a); if(Math.cos(a) < 0) g.scale(1,-1); g.scale(u*1.2,u*1.2); wgGun(g, 0); g.restore();
       if(up && ph < 1.12){ g.save(); g.translate(w/2+Math.cos(a)*13*u, h*0.42+Math.sin(a)*13*u); g.rotate(now*9); g.fillStyle = "#fff3a0"; starPath(g, u*4.5); g.fillStyle = "#ff8a3a"; starPath(g, u*2.4); g.restore(); }
+      return;
+    }
+    if(key === "rhythm"){ // 벽돌 발판 위로 가시 통나무가 굴러오고, 아래는 용암
+      g.fillStyle = "#2b2233"; g.fillRect(0,0,w,h*0.45);
+      g.fillStyle = "#3a2f45"; for(let y=0,row=0; y<h*0.45; y+=h/16,row++) for(let x=-(row%2)*w/12; x<w; x+=w/6) g.fillRect(x+1, y+1, w/6-2, h/16-2);
+      const lava = g.createLinearGradient(0,h*0.45,0,h); lava.addColorStop(0,"#ff7a1a"); lava.addColorStop(1,"#8a1410"); g.fillStyle = lava; g.fillRect(0,h*0.45,w,h*0.55);
+      g.fillStyle = "#857a8c"; g.fillRect(w*0.06, h*0.45, w*0.88, h*0.2); g.fillStyle = "#4a4150"; g.fillRect(w*0.06, h*0.65, w*0.88, h*0.04);
+      const u = Math.min(w/34, h/70), q = (now*0.8)%1.3;
+      rhLog(g, w*0.1, w*0.9, h*0.42+q*h*0.16, 3*u, -now*9, u, q < 1.1 ? 1 : 0);
       return;
     }
     if(key === "balloon"){ // 부풀었다 줄었다 하는 풍선 + 배수
@@ -3957,6 +4257,7 @@
     if(room.game === "auction") return drawAuction(ts, dt);
     if(room.game === "watergun") return drawWg(ts, dt);
     if(room.game === "duel") return drawDu(ts, dt);
+    if(room.game === "rhythm") return drawRh(ts, dt);
     if(room.game === "balloon") return drawBalloon(ts, dt);
     if(room.game === "coin") return drawCn(ts, dt);
     if(room.game === "plinko") return drawPlinko(ts, dt);

@@ -74,6 +74,7 @@ const GAMES = [
   { key: "coin", name: "도박 코인 단타", cap: (day) => 100 + 100 * day, st: "cn", free: true }, // 하루 CN_ROUNDS판, 투자금은 가진 돈까지
   { key: "plinko", name: "플링코", cap: (day) => 50 + 50 * day, st: "pk" }, // 하루 PK_ROUNDS판, cap은 판당
   { key: "duel", name: "총잡이 결투", cap: (day) => 50 + 50 * day, min: 2, st: "du", capName: "참가비" }, // 하루 DU_ROUNDS판, cap = 판당 고정 참가비
+  { key: "stopwatch", name: "블라인드 스톱워치", cap: (day) => 50 + 50 * day, min: 2, st: "sw", capName: "참가비" }, // 하루 SW_ROUNDS판, cap = 판당 고정 참가비
 ];
 // 펭귄 빙산 건너기: 점프할수록 성공률이 떨어지고, 배당은 0.95 ÷ (지금까지 성공률의 곱) → 어디서 멈추든 기대 환급률 95%.
 // PG_MULTS[k] = k+1번 성공한 뒤 멈추면 받는 배수. 마지막(10번째) 점프에 성공하면 섬에 도착해서 자동으로 챙긴다.
@@ -290,6 +291,7 @@ function broadcastRoom(room) {
       cn: room.cn, // 코인: 지금까지의 가격 기록·체결 내역뿐 (미래 가격은 서버에도 없다). 도중 입장자도 이걸로 차트를 그린다
       wg: room.wg && wgPublic(room.wg),
       du: room.du && duPublic(room.du),
+      sw: room.sw && swPublic(room.sw),
       au: room.au && { round: room.au.round, rounds: room.au.rounds, vals: room.au.vals, probs: AU_PROBS, ev: AU_EV, reveal: room.au.reveal }, // 상자 금액·입찰액·힌트는 공개 전까지 절대 안 내보낸다
       nc: room.nc && { round: room.nc.round, rounds: room.nc.rounds, carry: room.nc.carry, picks: room.nc.shown }, // 고른 숫자는 공개(ncReveal) 전까지 절대 안 내보낸다
       vote: room.vote && { options: room.vote.options, votes: room.vote.votes, counts: voteCounts(room), pick: room.vote.pick, voter: room.vote.voter, game: room.vote.game },
@@ -370,6 +372,7 @@ function startDay(room, key) {
   room.pg = game.key === "penguin" ? pgGold({ round: 1, rounds: PG_ROUNDS }) : null;
   room.wg = game.key === "watergun" ? { round: 1, rounds: WG_ROUNDS } : null;
   room.du = game.key === "duel" ? { round: 1, rounds: DU_ROUNDS } : null;
+  room.sw = game.key === "stopwatch" ? { round: 1, rounds: SW_ROUNDS } : null;
   room.bl = game.key === "balloon" ? { round: 1, rounds: BL_ROUNDS, t0: 0, hidden: null, cash: {}, crash: null, ffAt: 0 } : null;
   room.cn = game.key === "coin" ? { round: 1, rounds: CN_ROUNDS, ticks: CN_TICKS, fee: CN_FEE, ...cnFresh() } : null;
   room.dice = game.key === "dice" ? { round: 1, rounds: DICE_ROUNDS, odds: DICE_BETS.map((b) => b.odds), roll: null } : null;
@@ -390,6 +393,7 @@ function startDay(room, key) {
   if (room.ip) sys(room, "🙈 내 카드만 못 봐요 · 20초 안에 콜($" + room.cap + " 더)/다이 · 10 들고 다이하면 벌금!");
   if (room.wg) sys(room, "💥 6칸 중 1칸에 총알 · 차례마다 당기기, 또는 참가비 절반 내고 넘기기(판당 1회) · 🔫🔫 연속 2발에서 살아남으면 몫 두 배!");
   if (room.du) sys(room, "🤠 \"쏴!\" 신호가 뜨면 제일 먼저 쏜 사람이 판돈 독식! 신호 전에 쏘면 오발로 아웃 · 🌭 가짜 신호 주의");
+  if (room.sw) sys(room, "⏱️ 목표 시간에 맞춰 STOP! 숫자는 " + SW_SHOW + "초 뒤 사라져요 · 오차가 제일 작은 사람이 판돈 독식 · 목표 × 2까지 안 누르면 실격");
   if (room.pg) sys(room, "✨ 매판 황금 얼음이 하나! 거기로 뛰는 점프는 성공률 반토막, 성공하면 배당 두 배");
   if (room.bl) sys(room, "🎈 터지기 전에 놓으면 그때 배수만큼! 못 놓고 터지면 판돈 전액 잃음 (최대 x" + BL_MAX + ") · 👑 제일 늦게 놓고 살아남은 1명은 남들 수익의 " + BL_LAST * 100 + "%를 떼 간다");
   if (room.cn) sys(room, "🪙 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 현금으로 시작, 매수 = 전액 코인 / 매도 = 전액 현금 (거래마다 수수료 " + CN_FEE * 100 + "%, 마감 때 자동 매도)");
@@ -412,6 +416,7 @@ function checkAllReady(room) {
   if (room.game === "auction") return auReveal(room);
   if (room.game === "watergun") return wgStart(room);
   if (room.game === "duel") return duStart(room);
+  if (room.game === "stopwatch") return swStart(room);
   if (room.game === "balloon") return blStart(room);
   if (room.game === "coin") return cnStart(room);
   if (room.game === "plinko") return pkDrop(room);
@@ -1069,6 +1074,96 @@ function duJoin(room, me, v) { // 참가(참가비 cap 고정) / 취소
   broadcastRoom(room);
 }
 
+// ---------- 블라인드 스톱워치 (키 stopwatch · 접두어 sw) ----------
+// 참가비(= cap 고정, me.bets[0])를 낸 사람들 앞에 목표 시간(SW_TARGET 사이, 소수 둘째 자리)을 공개하고 SW_READY 뒤 스톱워치를 돌린다.
+// 숫자는 클라이언트가 SW_SHOW초 동안만 보여 주고 사라진다(블라인드). 각자 목표라고 느끼는 순간 STOP → 오차 절댓값이 가장 작은 사람이 판돈 × 0.95 독식(동점이면 나눔).
+// 목표 × 2까지 안 누르면 실격(전원 실격이면 하우스 몫). 멈춘 시각은 결과 전까지 안 내보낸다 — 남의 시각이 보이면 지금 몇 초인지 들키니까.
+// 시간은 결투처럼 클라이언트가 swGo를 받은 순간부터 잰 값(t)을 쓰고, 서버가 잰 경과 시간보다 클 수는 없게 자른다.
+// ponytail: t를 조작하면 서버 경과 시간 안에서 아무 값이나 낼 수 있다(목표에 딱 맞춰 보내기 등). 친구끼리라 믿는다 — 문제 되면 서버 기준 시간 + 핑 보정으로 바꾼다.
+const SW_ROUNDS = 3;
+const SW_TARGET = [5, 12]; // 목표 시간(초)
+const SW_READY = 2500; // 목표 공개 후 출발까지(ms)
+const SW_SHOW = 3; // 숫자가 보이는 시간(초) — 클라이언트 연출, 안내문용
+const SW_PERFECT = 0.05; // 이 오차 이내면 🎯 퍼펙트 연출(초)
+const SW_EDGE = 0.95;
+const swPublic = (S) => ({ round: S.round, rounds: S.rounds, target: S.target, order: S.order, pot: S.pot, stopped: S.stops && Object.keys(S.stops), since: S.t0 ? Date.now() - S.t0 : 0 }); // 멈춘 시각(stops)은 결과 전까지 절대 안 나간다
+
+function swStart(room) {
+  const S = room.sw, ps = [...room.players.values()].filter((p) => p.bets[0]);
+  if (ps.length < 2) { // 혼자면 겨룰 상대가 없다 → 환불하고 이 판은 무효
+    for (const p of ps) { p.money += p.bets[0]; p.bets = {}; }
+    broadcast(room, { type: "toast", text: "⏱️ 참가자가 2명이 안 돼서 이번 판은 무효! (참가비 환불)" });
+    return swNext(room);
+  }
+  Object.assign(S, { target: Math.round(rnd(SW_TARGET[0], SW_TARGET[1]) * 100) / 100, order: ps.map((p) => p.id), pot: ps.reduce((a, p) => a + p.bets[0], 0), stops: {}, t0: 0 });
+  room.phase = "swReady";
+  broadcastRoom(room);
+  clearTimeout(room.timer);
+  room.timer = setTimeout(() => swGo(room), SW_READY);
+}
+
+function swGo(room) {
+  const S = room.sw;
+  S.t0 = Date.now();
+  room.phase = "swRun";
+  broadcast(room, { type: "swGo" }); // 클라이언트는 이걸 받은 순간부터 잰다
+  broadcastRoom(room);
+  room.timer = setTimeout(() => swEnd(room), S.target * 2000);
+}
+
+function swStop(room, me, t) {
+  const S = room.sw;
+  if (!S || room.phase !== "swRun" || !S.order.includes(me.id) || me.id in S.stops) return;
+  S.stops[me.id] = Math.round(Math.max(0, Math.min((Date.now() - S.t0) / 1000, Number(t) || Infinity)) * 100) / 100; // 서버가 잰 시간보다 늦을 수는 없다
+  broadcastRoom(room);
+  swCheck(room);
+}
+
+function swCheck(room) { // 남은 사람(📴 제외)이 다 멈췄으면 바로 끝
+  const S = room.sw;
+  if (!S || room.phase !== "swRun") return;
+  if ([...room.players.values()].filter((p) => S.order.includes(p.id) && !p.rcAway).every((p) => p.id in S.stops)) swEnd(room);
+}
+
+function swEnd(room) {
+  const S = room.sw, payouts = {};
+  clearTimeout(room.timer);
+  const ps = [...room.players.values()].filter((p) => S.order.includes(p.id)); // 나간 사람이 낸 돈은 판돈에 남는다
+  const err = {};
+  for (const [id, t] of Object.entries(S.stops)) if (t <= S.target * 2) err[id] = Math.round(Math.abs(t - S.target) * 100) / 100;
+  const best = Math.min(...Object.values(err));
+  const winners = ps.filter((p) => err[p.id] === best); // 동점이면 나눈다, 전원 실격이면 아무도 없다(하우스 몫)
+  const win = winners.length ? Math.floor((S.pot * SW_EDGE) / winners.length) : 0;
+  for (const p of ps) {
+    const bet = p.bets[0] || 0, w = winners.includes(p) ? win : 0;
+    p.money += w;
+    p.bets = {};
+    payouts[p.id] = { bet, win: w };
+  }
+  room.phase = "result";
+  room.result = { winners: winners.map((p) => p.id), target: S.target, stops: S.stops, err, perfect: best <= SW_PERFECT, pot: S.pot, payouts };
+  broadcastRoom(room);
+  room.timer = setTimeout(() => swNext(room), 6000);
+}
+
+function swNext(room) { // 다음 판 참가 신청 (마지막 판이었으면 밤)
+  if (room.sw.round >= room.sw.rounds) return startNight(room);
+  room.sw = { round: room.sw.round + 1, rounds: room.sw.rounds };
+  room.phase = "betting";
+  room.result = null;
+  for (const p of room.players.values()) p.ready = false;
+  broadcastRoom(room);
+  checkAllReady(room);
+}
+
+function swJoin(room, me, v) { // 참가(참가비 cap 고정) / 취소
+  if (!room.sw || room.phase !== "betting" || me.ready || me.mining) return;
+  if (v && !me.bets[0] && me.money >= room.cap) { me.money -= room.cap; me.bets = { 0: room.cap }; }
+  else if (!v && me.bets[0]) { me.money += me.bets[0]; me.bets = {}; }
+  else return;
+  broadcastRoom(room);
+}
+
 // ---------- 풍선 불기 ----------
 // 크래시 게임: 공용 풍선의 배수 m(t) = e^(BL_RATE·t)가 x1.00부터 부풀고, 터지기 전에 "놓기"를 누르면 그때 배수만큼 받는다. 판돈은 me.bets[0].
 // 터지는 배수는 시작할 때 미리 뽑아 room.bl.hidden에만 둔다(broadcastRoom은 필드를 골라 보내므로 밖으로 안 나간다).
@@ -1595,6 +1690,7 @@ function leaveRoom(ws) {
   if (room.ip) ipCheckDone(room); // 나간 사람만 콜/다이를 고민 중이었던 경우 (나간 사람은 다이로 친다)
   if (room.wg) wgCheck(room); // 차례인 사람이 나갔거나 1명만 남은 경우
   if (room.du) duCheck(room); // 나간 사람만 아직 안 쐈던 경우
+  if (room.sw) swCheck(room); // 나간 사람만 아직 안 멈췄던 경우
   if (room.bl) blCheckDone(room); // 나간 사람만 줄을 쥐고 있었던 경우
 }
 
@@ -1639,6 +1735,9 @@ function handleMessage(ws, msg) {
   if (msg.type === "bet" && room.du) return; // 결투도 참가비 고정 → duJoin으로만
   if (msg.type === "duJoin") return duJoin(room, me, !!msg.v);
   if (msg.type === "duShot") return duShot(room, me, msg.rt);
+  if (msg.type === "bet" && room.sw) return; // 스톱워치도 참가비 고정 → swJoin으로만
+  if (msg.type === "swJoin") return swJoin(room, me, !!msg.v);
+  if (msg.type === "swStop") return swStop(room, me, msg.t);
   if (msg.type === "emReact") return emReact(room, ws, me, msg.e); // 이모티콘 리액션 (방 안에서만)
 
   if (msg.type === "start") {
@@ -1660,6 +1759,7 @@ function handleMessage(ws, msg) {
     room.au = null;
     room.wg = null;
     room.du = null;
+    room.sw = null;
     room.cn = null;
     room.pk = null;
     for (const p of room.players.values()) Object.assign(p, { money: START_MONEY, dayStart: START_MONEY, history: [START_MONEY], ready: false, begging: false, begged: false, mining: false, bets: {} });
@@ -1764,6 +1864,7 @@ const rcAutoAct = {
   indian: (room, p) => ipAct(room, p, "die"), // 결정 못 하고 끊기면 다이 (이미 정했으면 ipAct가 무시)
   watergun: (room, p) => wgAct(room, p, "pull"), // 자기 차례면 당긴다 (차례가 아니면 wgAct가 무시)
   balloon: (room, p) => blAct(room, p), // 쥐고 있던 풍선은 그 자리에서 놓는다
+  stopwatch: (room) => swCheck(room), // 📴는 안 누른 걸로 친다 → 나머지가 다 멈췄으면 끝낸다
 };
 // 복귀할 때 부르는 훅 (room, ws, p): 게임별로 본인에게만 보내던 비공개 정보를 다시 보낸다. 새 게임이 rcResync.push(...)로 붙인다.
 const rcResync = [
@@ -2250,6 +2351,48 @@ if (process.argv.includes("--check")) {
     clearTimeout(r.timer); r.du.fakeTimers.forEach(clearTimeout);
     duFire(r); duEnd(r); // 아무도 안 쐈다 → 둘이 나눈다
     assert(r.result.winners.length === 2 && A.money === 1042 - 100 + Math.floor(200 * DU_EDGE / 2));
+    clearTimeout(r.timer);
+    delete process.env.GAME;
+    rooms.delete(r.code);
+  }
+
+  { // 블라인드 스톱워치: 오차 제일 작은 사람 독식, 클라 시간은 서버 경과로 자름, 멈춘 시각은 결과 전까지 안 샌다, 2배 넘기면 실격
+    process.env.GAME = "stopwatch";
+    const [a, b, c] = [wgFake(), wgFake(), wgFake()];
+    handleMessage(a, { type: "create", name: "SA" });
+    for (const w of [b, c]) handleMessage(w, { type: "join", id: a.room.code, name: "S" });
+    handleMessage(a, { type: "start" });
+    const r = a.room, [A, B, C] = [a, b, c].map((w) => r.players.get(w));
+    assert(r.game === "stopwatch" && r.cap === 100);
+    handleMessage(a, { type: "bet", i: 0, amount: 10 });
+    assert(!A.bets[0], "스톱워치는 칩 베팅을 안 받는다");
+    for (const w of [a, b, c]) { handleMessage(w, { type: "swJoin", v: true }); handleMessage(w, { type: "ready", v: true }); }
+    assert(r.phase === "swReady" && r.sw.pot === 300 && A.money === 900 && r.sw.target >= 5 && r.sw.target <= 12);
+    handleMessage(a, { type: "swStop", t: 1 }); // 출발 전엔 무시
+    assert(!(A.id in r.sw.stops));
+    clearTimeout(r.timer);
+    r.sw.target = 8;
+    swGo(r);
+    assert([a, b, c].every((w) => w.log.some((d) => d.includes('"swGo"'))));
+    r.sw.t0 -= 10000; // 10초 지났다고 치고
+    handleMessage(a, { type: "swStop", t: 7.9 }); // 오차 0.1
+    handleMessage(b, { type: "swStop", t: 99 }); // 서버 경과 10초로 잘림 → 오차 2
+    assert(r.sw.stops[B.id] === 10 && r.phase === "swRun");
+    assert(![a, b, c].some((w) => w.log.some((d) => d.includes('"stops"'))), "멈춘 시각은 결과 전까지 안 나간다");
+    handleMessage(a, { type: "swStop", t: 8 }); // 두 번은 못 누른다
+    handleMessage(c, { type: "swStop", t: 8.1 }); // 오차 0.1 → A와 동점
+    assert(r.phase === "result" && r.result.winners.length === 2 && !r.result.perfect, "전원 누르면 바로 끝, 동점은 나눔");
+    assert(A.money === 900 + Math.floor(300 * SW_EDGE / 2) && C.money === A.money && B.money === 900);
+    clearTimeout(r.timer);
+    swNext(r);
+    for (const w of [a, b]) { handleMessage(w, { type: "swJoin", v: true }); handleMessage(w, { type: "ready", v: true }); }
+    handleMessage(c, { type: "ready", v: true }); // C는 구경
+    assert(r.phase === "swReady" && r.sw.order.length === 2);
+    clearTimeout(r.timer); r.sw.target = 6; swGo(r);
+    r.sw.t0 -= 6000;
+    handleMessage(b, { type: "swStop", t: 6.03 }); // 퍼펙트
+    swEnd(r); // A는 끝까지 안 눌렀다 → 실격
+    assert(r.result.winners[0] === B.id && r.result.perfect && !(A.id in r.result.err) && B.money === 900 - 100 + Math.floor(200 * SW_EDGE));
     clearTimeout(r.timer);
     delete process.env.GAME;
     rooms.delete(r.code);

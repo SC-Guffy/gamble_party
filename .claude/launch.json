@@ -20,6 +20,17 @@
         "server.js"
       ],
       "port": 3111
+    },
+    {
+      "name": "stopwatch-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "GAME=stopwatch",
+        "PORT=3112",
+        "node",
+        "server.js"
+      ],
+      "port": 3112
     }
   ]
 }

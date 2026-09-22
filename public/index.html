@@ -232,9 +232,13 @@
   #au-note b{color:#161320;background:var(--gold);border-radius:8px;padding:4px 10px;font-size:13.5px}
   #au-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
   /* 러시안 룰렛(wg): 참가비가 고정이라 칩 대신 참가 버튼, 차례엔 당기기/넘기기 + 남은 시간 막대 */
-  #wg-join{display:none} #panel-bet:is(.wg-on,.du-on) #wg-join{display:flex} #panel-bet:is(.wg-on,.du-on) #chips{display:none}
+  #wg-join{display:none} #panel-bet:is(.wg-on,.du-on,.sw-on) #wg-join{display:flex} #panel-bet:is(.wg-on,.du-on,.sw-on) #chips{display:none}
   /* 총잡이 결투(du): 참가 버튼은 룰렛 것을 같이 쓰고, 결투 중엔 커다란 발사 버튼 하나 */
-  #du-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  #du-hint,#sw-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  #sw-stop{font-family:var(--font-display);font-size:22px;border:none;border-radius:18px;padding:26px 6px;cursor:pointer;color:#161320;background:var(--gold);box-shadow:0 7px 0 #b08a2a;touch-action:manipulation}
+  #sw-stop small{display:block;font-family:var(--font-body);font-weight:600;font-size:12px;opacity:.8;margin-top:6px}
+  #sw-stop:disabled{opacity:.35;cursor:not-allowed}
+  #sw-stop:not(:disabled):active{transform:translateY(5px);box-shadow:none}
   #du-shoot{font-family:var(--font-display);font-size:22px;border:none;border-radius:18px;padding:26px 6px;cursor:pointer;color:#fff;background:var(--bad);box-shadow:0 7px 0 #a93246;touch-action:manipulation}
   #du-shoot small{display:block;font-family:var(--font-body);font-weight:600;font-size:12px;opacity:.8;margin-top:6px}
   #du-shoot:disabled{opacity:.35;cursor:not-allowed}
@@ -506,6 +510,10 @@
       <div id="du-panel" hidden>
         <div id="du-hint"></div>
         <button id="du-shoot">🔫 쏴!<small>신호가 뜨면 누르세요 (스페이스)</small></button>
+      </div>
+      <div id="sw-panel" hidden>
+        <div id="sw-hint"></div>
+        <button id="sw-stop">✋ STOP<small>목표 시간이라고 느끼는 순간 (스페이스)</small></button>
       </div>
       <div id="bl-panel" hidden>
         <div id="bl-hint"></div>
@@ -869,7 +877,7 @@
   }
   let bgmStep = 0, bgmNext = 0;
   // 진행 중(경주·딜·굴림·공개·차례 등)엔 BGM이 빨라진다. 새 게임의 진행 phase는 여기에 추가
-  const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","duWait","duFire","blCount","blFly","cnMarket","pkDrop"];
+  const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","duWait","duFire","swReady","swRun","blCount","blFly","cnMarket","pkDrop"];
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
     const hot = room && HOT_PHASES.includes(room.phase), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
@@ -987,6 +995,7 @@
     if(rcOnMessage(msg)) return; // 재접속
     if(msg.type === "emReact") return emFly(msg); // 이모티콘 리액션
     if(msg.type === "duCue") return duOnCue(msg); // 결투: 진짜/가짜 신호
+    if(msg.type === "swGo") return swOnGo(); // 스톱워치: 출발 (여기서부터 잰다)
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -1035,6 +1044,8 @@
     if(wg) wgOnRoom(r); // 새 판이면 장면 초기화 + 차례 제한 시간 동기화
     const du = r.game === "duel";
     if(du) duOnRoom(r);
+    const sw = r.game === "stopwatch";
+    if(sw) swOnRoom(r, prev);
     const bl = r.game === "balloon";
     const cn = r.game === "coin";
     if(cn && r.phase === "cnMarket" && prev !== "cnMarket"){ setOverlay("🔔 장 시작!", 900); sfxGo(); }
@@ -1079,6 +1090,8 @@
     $("panel-bet").classList.toggle("wg-on", wg); // 러시안 룰렛: 칩 대신 참가 버튼 (CSS)
     $("panel-bet").classList.toggle("du-on", du); // 결투도 참가비 고정 → 같은 참가 버튼
     $("du-panel").hidden = !du || (r.phase !== "duWait" && r.phase !== "duFire");
+    $("panel-bet").classList.toggle("sw-on", sw); // 스톱워치도 참가비 고정 → 같은 참가 버튼
+    $("sw-panel").hidden = !sw || (r.phase !== "swReady" && r.phase !== "swRun");
     $("bl-panel").hidden = !bl || !["blCount","blFly","blPop"].includes(r.phase);
     if(bl) blOnRoom(prev);
     $("cn-panel").hidden = !cn || (r.phase !== "cnMarket" && r.phase !== "cnClose");
@@ -1098,6 +1111,7 @@
       auction: renderAu,
       watergun: renderWg,
       duel: renderDu,
+      stopwatch: renderSw,
       balloon: renderBl,
       coin: renderCn,
       plinko: renderPk,
@@ -1172,6 +1186,7 @@
     if(room.au && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 경매 " + room.au.round + "/" + room.au.rounds + "판";
     if(room.wg && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 러시안 룰렛 " + room.wg.round + "/" + room.wg.rounds + "판";
     if(room.du && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 결투 " + room.du.round + "/" + room.du.rounds + "판";
+    if(room.sw && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 스톱워치 " + room.sw.round + "/" + room.sw.rounds + "판";
     if(room.bl && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 풍선 " + room.bl.round + "/" + room.bl.rounds + "판";
     if(room.cn && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 코인 단타 " + room.cn.round + "/" + room.cn.rounds + "판";
     if(room.pk && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 플링코 " + room.pk.round + "/" + room.pk.rounds + "판";
@@ -1357,6 +1372,18 @@
         const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, tag = res.fouls.includes(p.id) ? "💥 오발" : p.id in res.shots ? "🔫 " + res.shots[p.id] + "ms" : "😶 못 쏨";
         return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
           (o ? '<span class="tag'+(res.fouls.includes(p.id) ? " bad" : "")+'">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(90); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
+    if(room.sw){
+      const S = room.sw, ws = res.winners.map((id) => (room.players.find((p) => p.id === id) || {name:"떠난 손님"}).name);
+      $("result-next").textContent = S.round < S.rounds ? "곧 다음 판 참가 신청이 열려요…" : "곧 밤이 찾아옵니다… 🌙";
+      $("result-title").textContent = "🎯 " + res.target.toFixed(2) + "초 · " + (ws.length ? (res.perfect ? "퍼펙트! " : "") + ws.join(" · ") + " 승! (오차 " + res.err[res.winners[0]].toFixed(2) + "초)" : "전원 실격! 판돈은 하우스 몫");
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, t = res.stops[p.id], e = res.err[p.id], tag = e != null ? "✋ " + t.toFixed(2) + "s (±" + e.toFixed(2) + ")" : "❌ 실격";
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          (o ? '<span class="tag'+(e == null ? " bad" : "")+'">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
       }).join("");
       if(mine && mine.win > mine.bet){ sfxWin(); confetti(90); } else if(mine && mine.win < mine.bet) sfxLose();
       return;
@@ -2618,7 +2645,7 @@
       can ? "💥 내 차례! 남은 " + G.k + "칸 중 1칸에 총알 — 당길까, 넘길까?" : (G.order.includes(myId) ? "" : "구경 중 · ") + name + " 차례… (총알 확률 1/" + G.k + ")";
   }
   const wgSend = (a) => { ensureAudio(); document.activeElement.blur(); sendMsg({type:"wgAct", a:a}); }; // blur: 스페이스가 방금 누른 버튼을 또 누르지 않게
-  $("wg-btn-in").addEventListener("click", () => { sfxChip(); if(room.du) return sendMsg({type:"duJoin", v:!me().bets[0]}); wgSend(me().bets[0] ? "out" : "in"); }); // 결투도 이 참가 버튼을 같이 쓴다
+  $("wg-btn-in").addEventListener("click", () => { sfxChip(); if(room.du) return sendMsg({type:"duJoin", v:!me().bets[0]}); if(room.sw) return sendMsg({type:"swJoin", v:!me().bets[0]}); wgSend(me().bets[0] ? "out" : "in"); }); // 결투도 이 참가 버튼을 같이 쓴다
   $("wg-btn-pull").addEventListener("click", () => wgSend("pull"));
   $("wg-btn-pass").addEventListener("click", () => wgSend("pass"));
   $("wg-btn-double").addEventListener("click", () => wgSend("double"));
@@ -2859,6 +2886,138 @@
     stepParticles(dt, null);
     if(flashT < 0.15){ g.fillStyle = "rgba(255,255,255,"+(0.6*(1-flashT/0.15))+")"; g.fillRect(-20,-20,W+40,H+40); }
     g.restore();
+  }
+
+  // ---------- 블라인드 스톱워치 (키 stopwatch · 접두어 sw) ----------
+  // 참가 신청(룰렛과 같은 참가 버튼) → swReady에 목표 시간 공개 → swGo가 온 순간부터 여기서 시간을 잰다(핑 무관). 숫자는 SW_SHOW초 뒤 사라진다.
+  // 결과가 오면 가려졌던 숫자를 목표까지 다시 보여 주고, 멈춘 시각을 타임라인 위 깃발로 하나씩 꽂는다.
+  // swV = {key 방:날:판, goAt(performance.now), stop 내가 누른 시각, seen 멈춘 사람(id→t), resT0 결과 연출 시작}
+  const SW_SHOW = 3;
+  let swV = null;
+  function swOnRoom(r, prev){
+    const key = r.code+":"+r.day+":"+r.sw.round;
+    if(!swV || swV.key !== key) swV = {key:key, goAt:null, stop:0, seen:{}, resT0:0};
+    if(r.phase === "swRun" && swV.goAt == null) swV.goAt = performance.now()-r.sw.since; // 도중 입장
+    if(r.phase === "swReady" && prev !== "swReady"){ setOverlay("🎯 목표 " + r.sw.target.toFixed(2) + "초", 1400); sfxGo(); }
+    if(r.phase === "result" && !swV.resT0){
+      swV.resT0 = performance.now()/1000;
+      if(r.result.perfect) setTimeout(() => { setOverlay("🎯 퍼펙트!", 1600); confetti(140); [0,0.1,0.2,0.3].forEach((d,k) => tone(880*(1+k*0.25),0.3,"triangle",0.12,null,d)); }, 2600);
+    }
+  }
+  function swOnGo(){
+    if(!room || !room.sw || !swV) return;
+    swV.goAt = performance.now();
+    tone(1320,0.2,"square",0.1,1760);
+  }
+  const swCan = () => { const S = room.sw; return room.phase === "swRun" && S.order && S.order.includes(myId) && !S.stopped.includes(myId) && !swV.stop && !me().rcAway; };
+  function swStop(){
+    if(!room || !room.sw || !swV || !swCan() || swV.goAt == null) return;
+    ensureAudio(); document.activeElement.blur();
+    swV.stop = performance.now();
+    sendMsg({type:"swStop", t:(swV.stop-swV.goAt)/1000});
+    renderSw();
+  }
+  function renderSw(){
+    const my = me(), S = room.sw, betting = room.phase === "betting", joined = !!my.bets[0];
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : joined ? "준비 완료" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const bi = $("wg-btn-in");
+    bi.hidden = my.mining; bi.disabled = !betting || my.ready || (!joined && my.money < room.cap);
+    bi.textContent = joined ? "참가 취소 (+$"+room.cap+")" : "참가 ⏱️ −$"+room.cap;
+    bi.classList.toggle("on", joined);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length;
+    if(betting) $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      "⏱️ " + S.round + "/" + S.rounds + "번째 판 · 참가비 $" + room.cap + " 고정 · 숫자는 " + SW_SHOW + "초 뒤 사라져요. 목표 시간에 가장 가깝게 STOP한 사람이 판돈의 95% 독식! (2명 이상 참가해야 시작)" + (!joined && my.money < room.cap ? " · 돈이 모자라 구경만 할 수 있어요" : "");
+    if(betting || !S.order) return;
+    const inGame = S.order.includes(myId), done = S.stopped.includes(myId) || swV.stop;
+    $("sw-stop").disabled = !swCan();
+    $("sw-hint").textContent = !inGame ? "구경 중 · 누가 제일 정확할까? 🍿" : room.phase === "swReady" ? "🎯 목표 " + S.target.toFixed(2) + "초 · 곧 출발!" :
+      done ? "✋ 멈췄다! 다른 사람을 기다리는 중…" : "속으로 세세요… 🎯 " + S.target.toFixed(2) + "초";
+  }
+  $("sw-stop").addEventListener("pointerdown", (e) => { e.preventDefault(); swStop(); });
+  window.addEventListener("keydown", (e) => {
+    if(!room || !room.sw || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if(e.code === "Space" || e.key === " "){ e.preventDefault(); swStop(); }
+  });
+  function swFace(g, cx, cy, r, sec, txt, col, now){ // 커다란 스톱워치: 테두리 + 꼭지 + 초침 + 디지털 숫자
+    g.fillStyle = "#c9ccd8"; g.fillRect(cx-r*0.12, cy-r*1.22, r*0.24, r*0.2); g.fillRect(cx-r*0.2, cy-r*1.3, r*0.4, r*0.1);
+    g.save(); g.translate(cx, cy); g.rotate(PI/4); g.fillRect(-r*0.07, -r*1.16, r*0.14, r*0.16); g.restore();
+    g.fillStyle = "#e6e8f0"; g.beginPath(); g.arc(cx, cy, r, 0, T); g.fill();
+    g.fillStyle = "#1b1830"; g.beginPath(); g.arc(cx, cy, r*0.88, 0, T); g.fill();
+    g.strokeStyle = "#5a5578"; g.lineWidth = 2;
+    for(let k=0;k<60;k++){ const a = k/60*T-PI/2, l = k%5 ? 0.06 : 0.13; g.beginPath(); g.moveTo(cx+Math.cos(a)*r*0.84, cy+Math.sin(a)*r*0.84); g.lineTo(cx+Math.cos(a)*r*(0.84-l), cy+Math.sin(a)*r*(0.84-l)); g.stroke(); }
+    if(sec != null){ const a = (sec%60)/60*T-PI/2; g.strokeStyle = "#ff5d72"; g.lineWidth = 3; g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx+Math.cos(a)*r*0.78, cy+Math.sin(a)*r*0.78); g.stroke(); }
+    g.fillStyle = "#ff5d72"; g.beginPath(); g.arc(cx, cy, r*0.05, 0, T); g.fill();
+    g.font = "800 "+Math.round(r*0.34)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
+    g.lineWidth = 5; g.strokeStyle = "#0b0a13"; g.strokeText(txt, cx, cy+r*0.4); g.fillStyle = col; g.fillText(txt, cx, cy+r*0.4);
+  }
+  // 장면: 어두운 무대 위 커다란 스톱워치, 참가자들은 아래 한 줄. 결과엔 스톱워치가 목표 시각까지 다시 돌고, 그 아래 타임라인에 깃발이 꽂힌다
+  function drawSw(ts, dt){
+    const g = ctx, now = ts/1000, S = room.sw, V = swV, n = room.players.length, res = room.phase === "result" && room.result;
+    if(!V) return;
+    const bg = g.createLinearGradient(0,0,0,H); bg.addColorStop(0,"#1c1733"); bg.addColorStop(1,"#0e0c1a");
+    g.fillStyle = bg; g.fillRect(0,0,W,H);
+    g.fillStyle = "rgba(255,240,200,.06)"; g.beginPath(); g.moveTo(W*0.4,0); g.lineTo(W*0.6,0); g.lineTo(W*0.78,H); g.lineTo(W*0.22,H); g.fill(); // 조명
+    const u = clamp(H/92, 2, 3.6), order = S.order || [], stopped = S.stopped || [];
+    const run = room.phase === "swRun", el = run && V.goAt != null ? (performance.now()-V.goAt)/1000 : 0;
+    const rt = res ? now-V.resT0 : 0, target = res ? res.target : S.target;
+    const cy = H*0.36, r = Math.min(H*0.24, W*0.22);
+    let sec = null, txt = "0.00", col = "#fff";
+    if(room.phase === "betting") txt = "⏱️", sec = now*6;
+    else if(room.phase === "swReady") txt = "0.00", col = "#7bd88f";
+    else if(run){
+      if(el < SW_SHOW){ sec = el; txt = el.toFixed(2); }
+      else { txt = "??.??"; col = "#6d6890"; }
+    }
+    if(res){ // 결과: 사라졌던 숫자가 목표 시각까지 빠르게 다시 올라간다 (화면이 좁아 시계 대신 큰 숫자만)
+      const s = Math.min(target, target*rt/1.8), fs = clamp(H*0.13, 20, 60);
+      g.font = "800 "+fs+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
+      g.lineWidth = 6; g.strokeStyle = "#0b0a13"; g.strokeText("⏱️ "+s.toFixed(2), W/2, H*0.12); g.fillStyle = s >= target ? "#ffdd7a" : "#fff"; g.fillText("⏱️ "+s.toFixed(2), W/2, H*0.12);
+    } else {
+      swFace(g, W/2, cy, r, sec, txt, col, now);
+      if(run && el >= SW_SHOW && el < SW_SHOW+0.4){ g.fillStyle = "rgba(11,10,19,"+(1-(el-SW_SHOW)/0.4)+")"; g.beginPath(); g.arc(W/2, cy, r*0.88, 0, T); g.fill(); } // 사라지는 순간
+      if(S.pot) pill(g, W/2, cy+r*1.18, (target ? "🎯 목표 " + target.toFixed(2) + "초 · " : "") + "판돈 $"+S.pot, "rgba(11,10,19,.85)", "#ffdd7a", clamp(u*3.8, 11, 15));
+    }
+    // 결과 타임라인: 0 ~ 목표×2, 목표선, 깃발은 1.8초부터 하나씩
+    if(res){
+      const x0 = W*0.08, x1 = W*0.92, ty = H*0.5, tx = (t) => x0+(x1-x0)*Math.min(t, target*2)/(target*2);
+      g.strokeStyle = "#5a5578"; g.lineWidth = 3; g.beginPath(); g.moveTo(x0, ty); g.lineTo(x1, ty); g.stroke();
+      g.fillStyle = "#a7a2c4"; g.font = "600 "+clamp(u*3.2,9,12)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "top";
+      for(let k=0;k<=4;k++){ const t = target*2*k/4; g.fillRect(tx(t)-1, ty-4, 2, 8); g.fillText(t.toFixed(1)+"s", tx(t), ty+7); }
+      g.fillStyle = "#ffdd7a"; g.fillRect(tx(target)-1.5, ty-H*0.3, 3, H*0.3+10);
+      pill(g, tx(target), ty-H*0.3, "🎯 "+target.toFixed(2), "#ffdd7a", "#161320", clamp(u*3, 9, 12));
+      const flags = order.map((id) => ({id:id, t:res.stops[id]})).filter((f) => f.t != null).sort((a,b) => Math.abs(b.t-target)-Math.abs(a.t-target)); // 먼 사람부터 꽂는다
+      flags.forEach((f, k) => {
+        const ft = rt-1.8-k*0.45; if(ft < 0) return;
+        const p = room.players.find((q) => q.id === f.id), x = tx(f.t), drop = Math.min(1, ft/0.25), top = ty-H*0.07-((flags.length-1-k)%3)*H*0.065, win = res.winners.includes(f.id);
+        if(!V.seen[f.id]){ V.seen[f.id] = now; tone(win ? 1046 : 520, 0.12, "triangle", 0.1); }
+        const c = p ? PCOL[p.color] : "#888", fy = top-(1-drop)*H*0.15;
+        g.strokeStyle = "#e6e8f0"; g.lineWidth = 2; g.beginPath(); g.moveTo(x, ty); g.lineTo(x, fy); g.stroke();
+        g.fillStyle = c; g.beginPath(); g.moveTo(x, fy); g.lineTo(x+7*u, fy+2.5*u); g.lineTo(x, fy+5*u); g.fill();
+        g.strokeStyle = win ? "#7bd88f" : "rgba(255,93,114,.7)"; g.setLineDash([3,3]); g.beginPath(); g.moveTo(x, ty+2); g.lineTo(tx(target), ty+2); g.stroke(); g.setLineDash([]); // 목표까지 거리
+        const e = res.err[f.id];
+        pill(g, x, fy-3*u, (p ? p.name : "?")+" "+f.t.toFixed(2)+"s "+(e == null ? "❌" : (f.t >= target ? "+" : "−")+e.toFixed(2)), "rgba(11,10,19,.85)", win ? "#7bd88f" : "#fff", clamp(u*3, 9, 12));
+      });
+    }
+    const seats = room.players.map((p,i) => ({p:p, i:i, x:W*(i+1)/(n+1), y:H*0.95}));
+    for(const s of seats){
+      const p = s.p, pay = res && res.payouts[p.id], inGame = order.includes(p.id) || room.phase === "betting", st = stopped.includes(p.id), win = res && res.winners.includes(p.id);
+      if(st && !res && !V.seen["s"+p.id]){ V.seen["s"+p.id] = now; tone(1568, 0.06, "square", 0.08); } // 딸깍 (누가 멈췄는지만 들린다)
+      const ct = V.seen["s"+p.id] != null ? now-V.seen["s"+p.id] : 9;
+      g.globalAlpha = inGame ? 1 : 0.45;
+      drawPerson(g, p.look, s.x, s.y, u*0.9, p.mining ? "mine" : pay ? (win ? "cheer" : pay.win < pay.bet ? "sad" : "idle") : st && ct < 0.8 ? "cheer" : "idle", now, s.i*1.7);
+      const lines = [[p.name, PCOL[p.color]], ["$"+p.money, "#ffdd7a"]];
+      const tag = pay ? [(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"] :
+        st ? ["✋ STOP", "#7bd88f"] : p.mining ? null : run && order.includes(p.id) ? ["⏳", "#fff"] :
+        room.phase === "betting" ? (p.bets[0] ? ["⏱️ 참가", "#ffb070"] : p.ready ? ["구경", "#a7a2c4"] : null) : !order.includes(p.id) ? ["구경", "#a7a2c4"] : null;
+      if(win) lines.push([res.perfect ? "🎯 퍼펙트!" : "🏆 승리!", "#ffdd7a"]);
+      if(tag) lines.push(tag);
+      personLabel(g, p, s.x, s.y-19*u, 11, lines);
+      g.globalAlpha = 1;
+    }
+    stepParticles(dt, null);
   }
 
   // ---------- 풍선 불기 ----------
@@ -3523,6 +3682,7 @@
     auction:   {name:"미스터리 상자 경매", icon:"🎁", sub:"하루 3판 · 밀봉 입찰로 상자를 낙찰"},
     watergun:  {name:"러시안 룰렛", icon:"💥", sub:"하루 3판 · 6발 중 1발이 진짜"},
     duel:      {name:"총잡이 결투", icon:"🤠", sub:"하루 3판 · 신호 뜨면 먼저 쏴라"},
+    stopwatch: {name:"블라인드 스톱워치", icon:"⏱️", sub:"하루 3판 · 안 보이는 초를 맞혀라"},
     balloon:   {name:"풍선 불기", icon:"🎈", sub:"하루 3판 · 터지기 전에 놓아라"},
     coin:      {name:"도박 코인 단타", icon:"🪙", sub:"하루 3판 · 30초 단타 매매"},
     plinko:    {name:"플링코", icon:"🔴", sub:"하루 3판 · 공이 떨어질 구역을 맞혀라"},
@@ -3629,6 +3789,12 @@
       const u = Math.min(w/34, h/70), ph = now%2, up = ph > 1 && ph < 1.6, a = up ? -0.25 : PI*0.4;
       g.save(); g.translate(w/2, h*0.42); g.rotate(a); if(Math.cos(a) < 0) g.scale(1,-1); g.scale(u*1.2,u*1.2); wgGun(g, 0); g.restore();
       if(up && ph < 1.12){ g.save(); g.translate(w/2+Math.cos(a)*13*u, h*0.42+Math.sin(a)*13*u); g.rotate(now*9); g.fillStyle = "#fff3a0"; starPath(g, u*4.5); g.fillStyle = "#ff8a3a"; starPath(g, u*2.4); g.restore(); }
+      return;
+    }
+    if(key === "stopwatch"){ // 숫자가 보였다 사라졌다 하는 스톱워치
+      g.fillStyle = "#1c1733"; g.fillRect(0,0,w,h);
+      const t = now%6, r = Math.min(w, h)*0.3;
+      swFace(g, w/2, h*0.55, r, t, t < 3 ? t.toFixed(2) : "??.??", t < 3 ? "#fff" : "#6d6890", now);
       return;
     }
     if(key === "balloon"){ // 부풀었다 줄었다 하는 풍선 + 배수
@@ -3957,6 +4123,7 @@
     if(room.game === "auction") return drawAuction(ts, dt);
     if(room.game === "watergun") return drawWg(ts, dt);
     if(room.game === "duel") return drawDu(ts, dt);
+    if(room.game === "stopwatch") return drawSw(ts, dt);
     if(room.game === "balloon") return drawBalloon(ts, dt);
     if(room.game === "coin") return drawCn(ts, dt);
     if(room.game === "plinko") return drawPlinko(ts, dt);

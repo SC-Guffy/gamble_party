@@ -243,6 +243,15 @@
   #du-shoot small{display:block;font-family:var(--font-body);font-weight:600;font-size:12px;opacity:.8;margin-top:6px}
   #du-shoot:disabled{opacity:.35;cursor:not-allowed}
   #du-shoot:not(:disabled):active{transform:translateY(5px);box-shadow:none}
+  /* 팔씨름(aw): 베팅꾼은 편(◀/▶)을 고르고 칩, 선수는 칩 없이 준비만. 경기 중엔 커다란 연타 버튼 */
+  #aw-side{display:none;gap:6px;justify-content:center;margin-bottom:6px} #panel-bet.aw-on #aw-side{display:flex}
+  #aw-side .chip{flex:1;max-width:220px;line-height:1.4} #aw-side .chip small{display:block;font-family:var(--font-body);font-weight:600;font-size:11px;opacity:.85}
+  #aw-side .chip.sel{background:var(--gold);color:var(--panel)}
+  #panel-bet.aw-fighter #chips, #panel-bet.aw-fighter #aw-side{display:none}
+  #aw-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
+  #aw-btn{font-family:var(--font-display);font-size:22px;border:none;border-radius:18px;padding:26px 6px;cursor:pointer;color:#161320;background:var(--gold);box-shadow:0 7px 0 var(--gold-shade);touch-action:manipulation;user-select:none;-webkit-user-select:none}
+  #aw-btn small{display:block;font-family:var(--font-body);font-weight:600;font-size:12px;opacity:.8;margin-top:6px}
+  #aw-btn:disabled{opacity:.35;cursor:not-allowed}
   #wg-btn-in{padding:13px 22px}
   #wg-hint{font-size:14px;font-weight:600;text-align:center;color:var(--ink)}
   #wg-time{height:8px;border-radius:4px;background:var(--panel-edge);overflow:hidden}
@@ -455,6 +464,7 @@
         <div id="bet-actions">
         <div id="bet-hint"></div>
         <div id="ip-join" hidden><button id="ip-in">참가<small></small></button><button id="ip-out">구경<small>이번 판은 쉬기</small></button></div>
+        <div id="aw-side"><button class="chip" data-s="0"></button><button class="chip" data-s="1"></button></div>
         <div id="bj-side"><button class="chip" data-s="0">본 베팅</button><button class="chip" data-s="1">🃏🃏 퍼펙트 페어</button></div>
         <div id="chips">
           <button class="chip" data-amt="10">+$10</button>
@@ -515,6 +525,10 @@
       <div id="sw-panel" hidden>
         <div id="sw-hint"></div>
         <button id="sw-stop">✋ STOP<small>목표 시간이라고 느끼는 순간 (스페이스)</small></button>
+      </div>
+      <div id="aw-panel" hidden>
+        <div id="aw-hint"></div>
+        <button id="aw-btn">💪 으랏차!<small>연타! (스페이스)</small></button>
       </div>
       <div id="bl-panel" hidden>
         <div id="bl-hint"></div>
@@ -878,7 +892,7 @@
   }
   let bgmStep = 0, bgmNext = 0;
   // 진행 중(경주·딜·굴림·공개·차례 등)엔 BGM이 빨라진다. 새 게임의 진행 phase는 여기에 추가
-  const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","duWait","duFire","swReady","swRun","blCount","blFly","cnMarket","pkDrop","dgPlay"];
+  const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","duWait","duFire","swReady","swRun","blCount","blFly","cnMarket","pkDrop","dgPlay","awCount","awPull"];
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
     const hot = room && HOT_PHASES.includes(room.phase), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
@@ -998,6 +1012,7 @@
     if(msg.type === "duCue") return duOnCue(msg); // 결투: 진짜/가짜 신호
     if(msg.type === "swGo") return swOnGo(); // 스톱워치: 출발 (여기서부터 잰다)
     if(msg.type === "dgPos") return dgOnPos(msg); // 총알 피하기: 남의 위치 중계
+    if(msg.type === "awG") return awOnG(msg); // 팔씨름: 연타마다 게이지
     if(msg.type === "joined"){
       myId = msg.playerId;
       chatLog.innerHTML = "";
@@ -1050,6 +1065,8 @@
     if(sw) swOnRoom(r, prev);
     const dg = r.game === "dodge";
     if(dg) dgOnRoom(r); else canvas.style.touchAction = "";
+    const aw = r.game === "armwrestle";
+    if(aw) awOnRoom(r, prev);
     const bl = r.game === "balloon";
     const cn = r.game === "coin";
     if(cn && r.phase === "cnMarket" && prev !== "cnMarket"){ setOverlay("🔔 장 시작!", 900); sfxGo(); }
@@ -1098,6 +1115,8 @@
     $("sw-panel").hidden = !sw || (r.phase !== "swReady" && r.phase !== "swRun");
     $("panel-bet").classList.toggle("dg-on", dg); // 총알 피하기도 참가비 고정 → 같은 참가 버튼
     $("dg-panel").hidden = !dg || r.phase !== "dgPlay";
+    $("panel-bet").classList.toggle("aw-on", aw && r.phase === "betting"); // 팔씨름: 편 고르기
+    $("aw-panel").hidden = !aw || (r.phase !== "awCount" && r.phase !== "awPull");
     $("bl-panel").hidden = !bl || !["blCount","blFly","blPop"].includes(r.phase);
     if(bl) blOnRoom(prev);
     $("cn-panel").hidden = !cn || (r.phase !== "cnMarket" && r.phase !== "cnClose");
@@ -1119,6 +1138,7 @@
       duel: renderDu,
       stopwatch: renderSw,
       dodge: renderDg,
+      armwrestle: renderAw,
       balloon: renderBl,
       coin: renderCn,
       plinko: renderPk,
@@ -1195,6 +1215,7 @@
     if(room.du && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 결투 " + room.du.round + "/" + room.du.rounds + "판";
     if(room.sw && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 스톱워치 " + room.sw.round + "/" + room.sw.rounds + "판";
     if(room.dg && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 총알 피하기 " + room.dg.round + "/" + room.dg.rounds + "판";
+    if(room.aw && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 팔씨름 " + room.aw.round + "/" + room.aw.rounds + "판";
     if(room.bl && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 풍선 " + room.bl.round + "/" + room.bl.rounds + "판";
     if(room.cn && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 코인 단타 " + room.cn.round + "/" + room.cn.rounds + "판";
     if(room.pk && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 플링코 " + room.pk.round + "/" + room.pk.rounds + "판";
@@ -1405,6 +1426,19 @@
         const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, t = res.stops[p.id], e = res.err[p.id], tag = e != null ? "✋ " + t.toFixed(2) + "s (±" + e.toFixed(2) + ")" : "❌ 실격";
         return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
           (o ? '<span class="tag'+(e == null ? " bad" : "")+'">'+tag+'</span><span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : '<span class="tag">구경</span>')+'<span class="odds">$'+p.money+"</span></div>";
+      }).join("");
+      if(mine && mine.win > mine.bet){ sfxWin(); confetti(90); } else if(mine && mine.win < mine.bet) sfxLose();
+      return;
+    }
+    if(room.aw){
+      const A = room.aw;
+      $("result-next").textContent = A.round < A.rounds ? "곧 다음 판 선수가 뽑혀요…" : "곧 밤이 찾아옵니다… 🌙";
+      $("result-title").textContent = (res.ko ? "💥 KO! " : "⏱️ 판정승! ") + "💪 " + awName(res.winner) + " 승" + (res.refund && (res.pots[0] || res.pots[1]) ? " · 한쪽에만 걸려서 베팅 환불" : "");
+      $("result-rows").innerHTML = room.players.map((p) => {
+        const o = res.payouts[p.id], net = o ? o.win-o.bet : 0, s = res.pair.indexOf(p.id);
+        const tag = s >= 0 ? (s === res.w ? "🏆 선수" : "💪 선수") : o ? "💰 베팅" : "구경";
+        return '<div class="row'+(p.id===myId?" mine":"")+'"><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>" +
+          '<span class="tag'+(o && net < 0 ? " bad" : "")+'">'+tag+"</span>"+(o ? '<span class="'+(net>0?"plus":net<0?"minus":"")+'">'+(net>=0?"+":"−")+"$"+Math.abs(net)+"</span>" : "")+'<span class="odds">$'+p.money+"</span></div>";
       }).join("");
       if(mine && mine.win > mine.bet){ sfxWin(); confetti(90); } else if(mine && mine.win < mine.bet) sfxLose();
       return;
@@ -1725,11 +1759,11 @@
     ensureAudio();
     if(el.dataset.amt === "clear") return sendMsg({type:"clear"});
     if(room.bj && selected === 1 && !me().bets[0]) return toast("본 베팅부터 걸어 주세요!", true);
-    if((room.entrants || room.dice) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
+    if((room.entrants || room.dice || room.aw) && selected < 0) return toast(room.dice ? "먼저 베팅할 칸을 골라주세요!" : room.aw ? "먼저 이길 쪽(◀/▶)을 골라주세요!" : "먼저 동물을 골라주세요!", true); // 칸을 고르는 건 경마·주사위뿐, 나머지는 0번 칸 하나
     if(me().money <= 0) return toast("돈이 없어요…", true);
     if(!room.free && room.cap - sum(me().bets) <= 0) return toast((room.entrants ? "오늘" : "이번 판") + " 베팅 상한($"+room.cap+")을 다 채웠어요!", true);
     sfxChip();
-    sendMsg({type:"bet", i:room.entrants || room.dice ? selected : room.bj ? Math.max(0, selected) : 0, amount: el.dataset.amt === "all" ? (room.free ? me().money : room.cap) : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
+    sendMsg({type:"bet", i:room.entrants || room.dice || room.aw ? selected : room.bj ? Math.max(0, selected) : 0, amount: el.dataset.amt === "all" ? (room.free ? me().money : room.cap) : Number(el.dataset.amt)}); // 서버가 상한·잔액으로 잘라 준다
   });
   $("bj-side").addEventListener("click", (e) => { const el = e.target.closest(".chip"); if(!el || el.disabled) return; selected = Number(el.dataset.s); renderBj(); });
   begBar.addEventListener("click", (e) => {
@@ -3196,6 +3230,180 @@
     }
   }
 
+  // ---------- 팔씨름 (키 armwrestle · 접두어 aw) ----------
+  // 선수 2명은 서버가 뽑아 참가비까지 떼 둔다(room.aw.pair). 나머지는 #aw-side로 편을 고르고 칩으로 건다(bets[0|1]).
+  // 경기 중엔 커다란 연타 버튼(pointerdown·스페이스) → awTap. 게이지 g(−1~+1, + = 왼쪽 pair[0] 우세)는 서버가 awG로 연타마다 내려준다.
+  // awV = {key 방:날:판, show 화면 게이지(부드럽게 따라감), hit[s] 마지막 연타(초), last 내 마지막 전송(ms), t0 경기 시작(performance.now), slam KO 연출 시각}
+  let awV = null;
+  const awName = (id) => (room.players.find((p) => p.id === id) || {name:"떠난 손님"}).name;
+  const awPots = () => [0,1].map((i) => room.players.reduce((a, p) => a+(room.aw.pair && room.aw.pair.includes(p.id) ? 0 : p.bets[i]||0), 0));
+  function awOnRoom(r, prev){
+    const key = r.code+":"+r.day+":"+r.aw.round;
+    if(!awV || awV.key !== key) awV = {key:key, show:0, hit:[-9,-9], last:0, t0:null, slam:0};
+    if(r.phase === "awPull" && awV.t0 == null){ awV.t0 = performance.now()-r.aw.since; if(prev === "awCount"){ setOverlay("💪 당겨!!", 700); sfxGo(); } }
+    if(r.phase === "result" && r.result) r.aw.g = r.result.g;
+  }
+  function awOnG(msg){
+    if(!room || !room.aw || !awV) return;
+    const now = performance.now()/1000;
+    for(let s=0;s<2;s++) if(msg.taps[s] > room.aw.taps[s]) awV.hit[s] = now;
+    room.aw.g = msg.g; room.aw.taps = msg.taps;
+    renderAw(); // 밀리는지/미는지 안내 갱신
+  }
+  const awCan = () => room && room.aw && room.phase === "awPull" && room.aw.pair && room.aw.pair.includes(myId);
+  function awTap(){
+    if(!awCan()) return;
+    const now = performance.now();
+    if(now-awV.last < 66) return; // 서버 상한(초당 15번)보다 빠른 건 보내 봐야 버려진다
+    awV.last = now;
+    ensureAudio(); sendMsg({type:"awTap"});
+    tone(140+Math.abs(room.aw.g)*200, 0.06, "square", 0.06, 90);
+    const b = $("aw-btn"); if(b.animate) b.animate([{transform:"translateY(5px) scale(.97)"},{transform:"none"}], 90);
+  }
+  $("aw-btn").addEventListener("pointerdown", (e) => { e.preventDefault(); awTap(); });
+  window.addEventListener("keydown", (e) => {
+    if(!room || !room.aw || e.repeat || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if((e.code === "Space" || e.key === " ") && room.phase === "awPull"){ e.preventDefault(); awTap(); }
+  });
+  $("aw-side").addEventListener("click", (e) => { const el = e.target.closest(".chip"); if(!el || el.disabled) return; selected = Number(el.dataset.s); sfxChip(); renderAw(); });
+  function renderAw(){
+    const my = me(), A = room.aw, betting = room.phase === "betting", fighter = !!A.pair && A.pair.includes(myId), pots = awPots(), total = pots[0]+pots[1];
+    $("panel-bet").classList.toggle("aw-fighter", fighter || !A.pair); // 선수(또는 선수 없는 판)는 칩·편 고르기를 숨긴다 (CSS)
+    if(A.pair) document.querySelectorAll("#aw-side .chip").forEach((c) => {
+      const i = Number(c.dataset.s), odds = pots[i] && pots[1-i] ? " · x"+(total*0.95/pots[i]).toFixed(2) : "";
+      c.classList.toggle("sel", i === selected);
+      c.disabled = !betting || my.ready || my.mining;
+      c.innerHTML = (i ? "▶ " : "◀ ")+esc(awName(A.pair[i]))+"<small>$"+pots[i]+odds+(my.bets[i] ? " · 내 $"+my.bets[i] : "")+"</small>";
+    });
+    document.querySelectorAll("#chips .chip").forEach((c) => { c.disabled = !betting || my.ready || my.mining; });
+    btnReady.disabled = !betting; btnReady.hidden = my.mining;
+    btnReady.textContent = my.ready ? "준비 취소" : fighter ? "💪 준비 완료" : sum(my.bets) ? "준비 완료" : "이번 판은 구경하기";
+    btnReady.classList.toggle("on", my.ready);
+    const waiting = room.players.filter((p) => !p.ready && !p.mining).length, spent = sum(my.bets);
+    if(betting) $("bet-hint").textContent = my.mining ? "⛏️ 아오지 탄광에서 일하는 중… 오늘은 관전만 할 수 있어요. (캔 만큼 밤에 일당 $100~1000)" :
+      my.ready ? "다른 플레이어를 기다리는 중… (" + waiting + "명 남음)" :
+      !A.pair ? "💪 선수로 나설 사람이 2명이 안 돼요… 이번 판은 넘어갑니다" :
+      fighter ? "💪 " + A.round + "/" + A.rounds + "판 선수로 뽑혔어요! vs " + awName(A.pair[1-A.pair.indexOf(myId)]) + " · 참가비 $" + A.fee + " 냄 · 이기면 $" + Math.floor(A.fee*2*0.95) + " · 경기는 연타(클릭/스페이스)!" :
+      selected < 0 ? "💪 " + awName(A.pair[0]) + " vs " + awName(A.pair[1]) + " — 이길 쪽을 고른 뒤 칩을 눌러 베팅 (판당 상한 $" + room.cap + ", 한쪽에만 걸리면 환불)" :
+      awName(A.pair[selected]) + "에게 베팅 · 진 쪽 돈 + 원금의 95%를 건 만큼 나눠 가져요 (남은 한도 $" + Math.max(0, Math.min(room.cap-spent, my.money)) + ")";
+    if(betting || !A.pair) return;
+    const s = A.pair.indexOf(myId);
+    $("aw-btn").disabled = !awCan(); $("aw-btn").hidden = s < 0; // 구경꾼은 이모티콘 응원만
+    const lead = s < 0 ? 0 : (s ? -A.g : A.g);
+    $("aw-hint").textContent = s < 0 ? "구경 중 · 응원 이모티콘을 날려 주세요! 📣" : room.phase === "awCount" ? "준비… 신호가 오면 미친 듯이 연타!" :
+      lead > 0.3 ? "밀어붙이는 중! 끝까지 넘겨라 🔥" : lead < -0.3 ? "밀리고 있어요!! 버텨!! 😤" : "팽팽하다… 더 빨리!!";
+  }
+  // 장면: 뒷방 술집, 매달린 전등 아래 나무 테이블. 두 선수가 마주 앉아 팔꿈치를 대고 손을 맞잡았다 — 맞잡은 손은 게이지 각도만큼 기운다
+  function awLimb(g, x1, y1, x2, y2, w, col){ // 복셀 팔 한 토막: 윗면 밝게, 아랫면 어둡게
+    const len = Math.hypot(x2-x1, y2-y1);
+    g.save(); g.translate(x1, y1); g.rotate(Math.atan2(y2-y1, x2-x1));
+    g.fillStyle = col; g.fillRect(0, -w/2, len, w);
+    g.fillStyle = shade(col, 1.18); g.fillRect(0, -w/2, len, w*0.28);
+    g.fillStyle = shade(col, 0.74); g.fillRect(0, w*0.22, len, w*0.28);
+    g.restore();
+  }
+  function drawAw(ts, dt){
+    const g = ctx, now = ts/1000, A = room.aw, V = awV, res = room.phase === "result" && room.result;
+    if(!V) return;
+    const pull = room.phase === "awPull", pair = A.pair || [];
+    V.show += ((A.g || 0)-V.show)*Math.min(1, dt*14);
+    const gv = V.show, strain = [0,1].map((s) => clamp(1-(now-V.hit[s])/0.35, 0, 1));
+    if(res && res.ko && !V.slam){ V.slam = now; if(actx) drum(actx.currentTime, 0.3, 0.4, 300); tone(90,0.4,"sawtooth",0.2,40); }
+    const slamT = V.slam ? now-V.slam : 9;
+    const shake = (pull ? (strain[0]+strain[1])*1.2 + Math.max(0, Math.abs(gv)-0.6)*8 : 0) + (slamT < 0.4 ? 14*(1-slamT/0.4) : 0);
+    g.save();
+    if(shake) g.translate((R()-0.5)*shake, (R()-0.5)*shake);
+    // 벽·바닥·전등 빛
+    const wall = g.createLinearGradient(0,0,0,H); wall.addColorStop(0,"#2a1a14"); wall.addColorStop(1,"#4a2e1e");
+    g.fillStyle = wall; g.fillRect(-20,-20,W+40,H+40);
+    g.fillStyle = "rgba(0,0,0,.18)"; for(let x=0; x<W; x+=34) g.fillRect(x, 0, 3, H*0.66); // 판자벽
+    g.fillStyle = "#2b1a10"; g.fillRect(-20, H*0.66, W+40, H);
+    const u = clamp(H/62, 2.5, 5.5), cx = W/2, ty = H*0.66, lamp = g.createRadialGradient(cx, ty-10*u, 4*u, cx, ty-10*u, W*0.45);
+    lamp.addColorStop(0,"rgba(255,210,120,.35)"); lamp.addColorStop(1,"rgba(255,210,120,0)"); g.fillStyle = lamp; g.fillRect(0,0,W,H);
+    g.fillStyle = "#161320"; g.fillRect(cx-0.5, 0, 1, H*0.08); g.fillRect(cx-5*u, H*0.08, 10*u, 2.5*u); g.fillStyle = "#ffd27a"; g.fillRect(cx-3*u, H*0.08+2.5*u, 6*u, 1.2*u);
+    // 구경꾼(베팅꾼·탄광)은 뒤쪽 양옆에 선다: 왼쪽 선수에 건 사람은 왼쪽, 오른쪽에 건 사람은 오른쪽
+    const crowd = room.players.filter((p) => !pair.includes(p.id)), nth = [0,0];
+    crowd.forEach((p, k) => {
+      const side = p.bets[0] && !p.bets[1] ? 0 : p.bets[1] && !p.bets[0] ? 1 : k%2, i = nth[side]++, sx = side ? W*(0.88-0.1*i) : W*(0.1+0.1*i), sy = ty-2*u, pay = res && res.payouts[p.id];
+      const winning = pull && (side ? gv < -0.2 : gv > 0.2), cheer = pay ? pay.win > pay.bet : winning;
+      drawPerson(g, p.look, sx, sy, u*0.8, p.mining ? "mine" : pay && pay.win < pay.bet ? "sad" : cheer ? "cheer" : pull ? "wave" : "idle", now, k*1.3);
+      const bet = (p.bets[0]||0)+(p.bets[1]||0), lines = [[p.name, PCOL[p.color]], ["$"+p.money, "#ffdd7a"]];
+      if(pay) lines.push([(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"]);
+      else if(bet) lines.push([(p.bets[0] ? "◀ " : "▶ ")+"$"+bet, "#ffb070"]);
+      personLabel(g, p, sx+2*u*0.8, sy-19*u*0.8, 10, lines);
+    });
+    // 선수 둘: 왼쪽은 그대로, 오른쪽은 좌우를 뒤집어 그린다. 이기는 쪽으로 몸이 기운다
+    const fx = [cx-17*u, cx+17*u], fy = ty+7*u, L = 12*u, th = gv*1.32, hand = [cx+Math.sin(th)*L, ty-Math.cos(th)*L+1.5*u];
+    pair.forEach((id, s) => {
+      const p = room.players.find((q) => q.id === id);
+      if(!p) return;
+      const dir = s ? -1 : 1, win = res && res.w === s, lose = res && res.w !== s, lean = (s ? -gv : gv)*0.08 + strain[s]*0.03;
+      g.save(); g.translate(fx[s], fy); if(s) g.scale(-1, 1); g.rotate(lean); // 뒤집은 좌표계라 둘 다 +가 가운데 쪽
+      drawPerson(g, p.look, 0, 0, u, win ? "cheer" : lose ? "sad" : "idle", now, s*2.1, win);
+      if(!res){ const red = clamp(strain[s]*0.3 + Math.max(0, (s ? gv : -gv))*0.45, 0, 0.6); g.fillStyle = "rgba(230,40,40,"+red.toFixed(2)+")"; g.fillRect(-2.5*u, -16*u, 5*u, 5*u); } // 얼굴이 벌게진다
+      g.restore();
+      if(pull && R() < dt*(2+strain[s]*6+Math.max(0, s ? gv : -gv)*10)) emit(null, fy-16*u, {x:fx[s]+(R()-0.5)*5*u, color:"#8fd8ff", vx:(R()-0.5)*50*dir, vy:-60-R()*40, g:500, life:0.7, w:u*0.9, h:u*1.4}); // 땀방울
+    });
+    // 테이블 (선수 아랫도리를 가린다)
+    g.fillStyle = "#6b4424"; g.fillRect(cx-30*u, ty, 60*u, 3*u); g.fillStyle = "#8a5a30"; g.fillRect(cx-30*u, ty-1.2*u, 60*u, 1.4*u);
+    g.fillStyle = "#4a2e18"; g.fillRect(cx-30*u, ty+3*u, 60*u, H); g.fillStyle = "rgba(0,0,0,.25)"; g.fillRect(cx-30*u, ty+3*u, 60*u, 1.2*u);
+    g.fillStyle = "#b8864a"; g.fillRect(cx-1*u, ty-1.4*u, 2*u, 0.6*u); // 가운데 선
+    // 팔: 어깨 → 팔꿈치(테이블 위) → 맞잡은 손. 이긴 쪽은 만세라 팔을 테이블에서 뗀다
+    pair.forEach((id, s) => {
+      const p = room.players.find((q) => q.id === id);
+      if(!p || (res && res.w === s)) return;
+      const dir = s ? -1 : 1, sh = [fx[s]+3*u*dir, fy-10*u], el = [cx-4.5*u*dir, ty-0.5*u], skin = SKINS[p.look.skin], top = TOPS[p.look.top];
+      const hd = res ? [cx+(res.w ? -1 : 1)*L*0.95, ty-1.5*u] : hand;
+      awLimb(g, sh[0], sh[1], el[0], el[1], 3.2*u, top);
+      awLimb(g, el[0], el[1], hd[0], hd[1], 2.8*u, skin);
+      if(!res && strain[s] > 0.1){ // 힘줄
+        const a = Math.atan2(hd[1]-el[1], hd[0]-el[0]), len = Math.hypot(hd[0]-el[0], hd[1]-el[1]);
+        g.save(); g.translate(el[0], el[1]); g.rotate(a); g.strokeStyle = "rgba(150,40,70,"+(strain[s]*0.8).toFixed(2)+")"; g.lineWidth = Math.max(1, u*0.35);
+        g.beginPath(); for(let k=0;k<=6;k++) g.lineTo(len*(0.15+k*0.11), (k%2 ? 0.5 : -0.3)*u*dir); g.stroke(); g.restore();
+      }
+    });
+    // 맞잡은 주먹
+    if(pair.length === 2){
+      const hd = res ? [cx+(res.w ? -1 : 1)*L*0.95, ty-1.5*u] : hand, s0 = room.players.find((q) => q.id === pair[0]), s1 = room.players.find((q) => q.id === pair[1]);
+      g.save(); g.translate(hd[0], hd[1]); g.rotate(res ? (res.w ? -1.45 : 1.45) : th);
+      g.fillStyle = SKINS[(s0 || s1 || {look:{skin:0}}).look.skin]; g.fillRect(-2.6*u, -2.8*u, 2.8*u, 4.2*u);
+      g.fillStyle = SKINS[(s1 || s0 || {look:{skin:0}}).look.skin]; g.fillRect(-0.2*u, -3.2*u, 2.8*u, 4.2*u);
+      g.fillStyle = "rgba(0,0,0,.2)"; g.fillRect(-0.3*u, -3*u, 0.5*u, 4*u);
+      g.restore();
+      if(slamT < 0.05) burst(16, null, ty-u, (dx,dy) => ({x:hd[0], color:R()<0.5?"#c9a57a":"#fff3a0", vx:dx*180, vy:-Math.abs(dy)*160, g:420, life:0.6, w:u*(0.6+R()), spin:8}));
+    }
+    // 이름표 (선수 머리 위)
+    pair.forEach((id, s) => {
+      const p = room.players.find((q) => q.id === id), pay = res && p && res.payouts[p.id];
+      if(!p) return;
+      const lines = [[p.name, PCOL[p.color]], ["$"+p.money, "#ffdd7a"]];
+      if(pay) lines.push([(pay.win-pay.bet >= 0 ? "+$" : "−$")+Math.abs(pay.win-pay.bet), pay.win >= pay.bet ? "#7bd88f" : "#ff5d72"]);
+      else if(pull || room.phase === "awCount") lines.push(["💪 "+A.taps[s], "#fff"]);
+      if(res && res.w === s) lines.push(["🏆 승리!", "#ffdd7a"]);
+      personLabel(g, p, fx[s]+(s ? -2 : 2)*u, fy-22*u, 11, lines);
+    });
+    // 위쪽: 게이지 막대 + 남은 시간 / 베팅 안내
+    const bw = Math.min(W*0.7, 420), bx = cx-bw/2, by = 14, bh = 14;
+    if(pair.length === 2 && room.phase !== "betting"){
+      const c0 = PCOL[(room.players.find((q) => q.id === pair[0]) || {color:0}).color], c1 = PCOL[(room.players.find((q) => q.id === pair[1]) || {color:1}).color], mid = bx+bw/2+gv*bw/2;
+      g.fillStyle = "rgba(11,10,19,.8)"; g.fillRect(bx-3, by-3, bw+6, bh+6);
+      g.fillStyle = c0; g.fillRect(bx, by, mid-bx, bh); g.fillStyle = c1; g.fillRect(mid, by, bx+bw-mid, bh);
+      g.fillStyle = "#fff"; g.fillRect(mid-2, by-4, 4, bh+8); g.fillStyle = "rgba(255,255,255,.5)"; g.fillRect(cx-0.5, by, 1, bh);
+      const left = pull && V.t0 != null ? Math.max(0, 10-(performance.now()-V.t0)/1000) : null;
+      g.font = "800 "+clamp(H*0.07, 16, 34)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "top"; g.lineJoin = "round"; g.lineWidth = 5; g.strokeStyle = "#161320";
+      const txt = res ? (res.ko ? "💥 KO! " : "⏱️ 판정승 ") + awName(res.winner) : left != null ? left.toFixed(1) : "준비…";
+      g.fillStyle = res ? "#ffdd7a" : left != null && left < 3 ? "#ff5d72" : "#fff"; g.strokeText(txt, cx, by+bh+8); g.fillText(txt, cx, by+bh+8);
+    } else if(room.phase === "betting"){
+      const txt = pair.length === 2 ? "💪 " + awName(pair[0]) + " vs " + awName(pair[1]) : "💪 선수 모집 실패…";
+      g.font = "800 "+clamp(H*0.06, 14, 28)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "top"; g.lineJoin = "round"; g.lineWidth = 5; g.strokeStyle = "#161320";
+      g.fillStyle = "#fff"; g.strokeText(txt, cx, by); g.fillText(txt, cx, by);
+      const pots = awPots(); if(pots[0]+pots[1]) pill(g, cx, by+clamp(H*0.06, 14, 28)+18, "◀ $"+pots[0]+" · 베팅 · $"+pots[1]+" ▶", "rgba(11,10,19,.8)", "#ffdd7a", clamp(u*3, 10, 13));
+    }
+    stepParticles(dt, null);
+    if(slamT < 0.12){ g.fillStyle = "rgba(255,255,255,"+(0.5*(1-slamT/0.12))+")"; g.fillRect(-20,-20,W+40,H+40); }
+    g.restore();
+  }
+
   // ---------- 풍선 불기 ----------
   // 서버는 경과 시간과 성장률만 준다 → 배수 곡선 m(t) = e^(rate·t)는 여기서 그린다. 터지는 배수(crash)는 터진 뒤(또는 전원이 놓은 뒤)에야 내려온다.
   // 베팅은 블랙잭처럼 칩/준비 버튼, 부푸는 동안엔 커다란 "놓기" 버튼 하나(스페이스바).
@@ -3860,6 +4068,7 @@
     duel:      {name:"총잡이 결투", icon:"🤠", sub:"하루 3판 · 신호 뜨면 먼저 쏴라"},
     stopwatch: {name:"블라인드 스톱워치", icon:"⏱️", sub:"하루 3판 · 안 보이는 초를 맞혀라"},
     dodge:     {name:"총알 피하기", icon:"🎋", sub:"하루 3판 · 오래 버틴 순 70%·30%"},
+    armwrestle:{name:"팔씨름", icon:"💪", sub:"하루 3판 · 연타로 상대 팔을 넘겨라"},
     balloon:   {name:"풍선 불기", icon:"🎈", sub:"하루 3판 · 터지기 전에 놓아라"},
     coin:      {name:"도박 코인 단타", icon:"🪙", sub:"하루 3판 · 30초 단타 매매"},
     plinko:    {name:"플링코", icon:"🔴", sub:"하루 3판 · 공이 떨어질 구역을 맞혀라"},
@@ -3980,6 +4189,15 @@
       const m = Math.min(w,h)*0.12; g.fillStyle = "#d9cfae"; g.fillRect(m, m, w-2*m, h-2*m);
       for(let k = 0; k < 9; k++){ const a = k*2.4, f = (now*0.6+k/9)%1, r = Math.hypot(w,h)*0.5*(1-f); g.fillStyle = "#e8132b"; g.beginPath(); g.arc(w/2+Math.cos(a)*r, h/2+Math.sin(a)*r, Math.max(2, w/60), 0, T); g.fill(); }
       const u = Math.min(w/40, h/60); drawPerson(g, {top:0, bottom:0, hair:0, hairColor:0, skin:0}, w/2+S(now*3)*w*0.12, h*0.62, u, "idle", now, 0);
+      return;
+    }
+    if(key === "armwrestle"){ // 전등 아래 테이블, 맞잡은 두 팔이 이쪽저쪽 넘어갈 듯 버틴다
+      g.fillStyle = "#2a1a14"; g.fillRect(0,0,w,h);
+      const lg = g.createRadialGradient(w/2, h*0.35, 4, w/2, h*0.35, w*0.6); lg.addColorStop(0,"rgba(255,210,120,.35)"); lg.addColorStop(1,"rgba(255,210,120,0)"); g.fillStyle = lg; g.fillRect(0,0,w,h);
+      const u = Math.min(w/40, h/40), ty = h*0.72, L = 13*u, th = S(now*1.7)*0.5+S(now*7)*0.05, hd = [w/2+Math.sin(th)*L, ty-Math.cos(th)*L];
+      g.fillStyle = "#8a5a30"; g.fillRect(0, ty, w, 2*u); g.fillStyle = "#6b4424"; g.fillRect(0, ty+2*u, w, h);
+      awLimb(g, w/2-5*u, ty, hd[0], hd[1], 3.2*u, "#ffd9b3"); awLimb(g, w/2+5*u, ty, hd[0], hd[1], 3.2*u, "#c68642");
+      g.save(); g.translate(hd[0], hd[1]); g.rotate(th); g.fillStyle = "#ffd9b3"; g.fillRect(-3*u, -3*u, 3*u, 4.5*u); g.fillStyle = "#c68642"; g.fillRect(0, -3.4*u, 3*u, 4.5*u); g.restore();
       return;
     }
     if(key === "balloon"){ // 부풀었다 줄었다 하는 풍선 + 배수
@@ -4310,6 +4528,7 @@
     if(room.game === "duel") return drawDu(ts, dt);
     if(room.game === "stopwatch") return drawSw(ts, dt);
     if(room.game === "dodge") return drawDg(ts, dt);
+    if(room.game === "armwrestle") return drawAw(ts, dt);
     if(room.game === "balloon") return drawBalloon(ts, dt);
     if(room.game === "coin") return drawCn(ts, dt);
     if(room.game === "plinko") return drawPlinko(ts, dt);

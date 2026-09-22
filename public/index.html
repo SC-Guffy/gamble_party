@@ -252,7 +252,7 @@
   #cn-actions button:not(:disabled):active{transform:translateY(4px);box-shadow:none}
   #cn-stat{font-size:16px;font-weight:800;text-align:center;font-variant-numeric:tabular-nums} #cn-stat.cn-up{color:var(--good)} #cn-stat.cn-down{color:var(--bad)}
   #cn-hint{font-size:12.5px;color:var(--ink-dim);text-align:center}
-  #night-title,#final-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
+  #night-title,#final-title,#trib-title{font-family:var(--font-display);font-size:clamp(13px,4vw,20px);color:var(--gold);text-align:center;line-height:1.6}
   .chart{width:100%;height:220px;display:block;touch-action:pan-y}
   .mk{font-size:11px;flex:none}
   #night-note{font-size:13px;color:var(--ink-dim);text-align:center;line-height:1.5}
@@ -518,6 +518,10 @@
         <div id="night-note"></div>
         <div id="ln-panel"><b>💀 사채</b><span id="ln-info"></span><button data-ln="borrow">+$100 빌리기</button><button data-ln="repay">$100 갚기</button><button data-ln="repayAll">전액 갚기</button></div>
         <div class="btn-row"><button class="btn" id="btn-night">다음 날로 ▶</button></div>
+      </div>
+      <div id="panel-trib" hidden>
+        <div id="trib-title"></div>
+        <div class="rows" id="trib-rows"></div>
       </div>
       <div id="panel-final" hidden>
         <div id="final-title"></div>
@@ -858,7 +862,7 @@
   const HOT_PHASES = ["racing","countdown","playing","rolling","ncReveal","ipDecide","ipReveal","auReveal","wgTurn","blCount","blFly","cnMarket","pkDrop"];
   function bgmTick(){
     if(!actx || muted || actx.state !== "running" || document.hidden) return;
-    const hot = room && HOT_PHASES.includes(room.phase), night = room && (room.phase === "night" || room.phase === "final"), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
+    const hot = room && HOT_PHASES.includes(room.phase), night = room && ["night","tribute","final"].includes(room.phase), spb = 60/(hot ? 176 : night ? 88 : 138)/4;
     if(bgmNext < actx.currentTime) bgmNext = actx.currentTime+0.05; // 처음이거나 탭이 숨겨졌다 돌아온 경우
     while(bgmNext < actx.currentTime+0.3){
       const bar = Math.floor(bgmStep/16)%8, st = bgmStep%16, beat = st>>2, sub = st&3, t = bgmNext;
@@ -1009,8 +1013,9 @@
     if(r.phase === "lobby"){ show("lobby"); renderLobby(); return; }
     if(r.phase === "vote"){ if(prev !== "vote"){ show("vote"); buildVote(); } renderVote(); return; }
     if(screens.game.hidden){ show("game"); resizeCanvas(); }
-    const dark = r.phase === "night" || r.phase === "final";
-    if(dark && prev !== r.phase){ chartAnim = performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
+    const dark = ["night","tribute","final"].includes(r.phase);
+    if(dark && prev !== r.phase){ chartAnim = r.phase === "tribute" ? null : performance.now(); particles = []; setOverlay(""); if(r.phase === "final"){ sfxWin(); } }
+    if(r.phase === "tribute" && prev !== "tribute"){ trT0 = performance.now(); trFx = {}; ensureAudio(); tone(110,0.5,"sawtooth",0.1,55); tone(82,0.9,"triangle",0.13,41,0.35); } // 사채업자 등장: 둥— 둥—
     if(r.phase === "final" && prev !== "final") ttPlan(r); // 시상식 칭호 도장 순서
     const bj = r.game === "blackjack", dice = r.game === "dice", pg = r.game === "penguin";
     const nc = r.game === "nunchi";
@@ -1067,6 +1072,7 @@
     $("panel-result").hidden = r.phase !== "result";
     $("panel-night").hidden = r.phase !== "night";
     $("panel-final").hidden = r.phase !== "final";
+    $("panel-trib").hidden = r.phase !== "tribute";
     renderHud(); renderBegBar();
     const render = { // 게임별 패널 그리기 (새 게임은 여기에 한 줄 추가)
       derby: renderBet,
@@ -1084,6 +1090,7 @@
     if(!dark && render) render();
     if(r.phase === "night") renderNight();
     if(r.phase === "final") renderFinal();
+    if(r.phase === "tribute") renderTrib();
     if(r.phase === "result" && prev !== "result") renderResult();
     lnRender(); // 사채: HUD·정산표 빚 표시 + 패널
     mnRender(); // 탄광 미니게임 패널 (게임 종류와 상관없이 #panel 맨 위)
@@ -1152,6 +1159,7 @@
     if(room.bl && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 풍선 " + room.bl.round + "/" + room.bl.rounds + "판";
     if(room.cn && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 코인 단타 " + room.cn.round + "/" + room.cn.rounds + "판";
     if(room.pk && room.phase !== "night" && room.phase !== "final") $("hud-round").textContent = "☀️ DAY " + room.day + "/" + room.days + " 플링코 " + room.pk.round + "/" + room.pk.rounds + "판";
+    if(room.phase === "tribute") $("hud-round").textContent = "🚬 DAY " + room.day + "/" + room.days + " 상납";
     $("hud-players").innerHTML = room.players.map((p) => chipHTML(p, room.phase === "betting" || room.phase === "night")).join("");
   }
 
@@ -1273,10 +1281,10 @@
   function renderBegBar(){
     const my = me();
     let html = "";
-    if(room.phase === "night" && my.money === 0 && !my.begged) html += '<button id="btn-beg">🥺 한푼줍쇼 (딱 1번!)</button>';
+    if(room.phase === "night" && my.money <= room.tribute && !my.begged) html += '<button id="btn-beg">🥺 한푼줍쇼 (딱 1번!)</button>';
     for(const p of room.players){
       if(!p.begging) continue;
-      html += '<button class="beg" data-id="'+p.id+'">🥺 '+esc(p.name)+': 한푼 줍쇼!<small>'+(p.id===myId ? "탭하면 포기 (다시 못 해요)" : "탭해서 $"+ALMS+" 적선하기")+"</small></button>";
+      html += '<button class="beg" data-id="'+p.id+'">🥺 '+esc(p.name)+': 한푼 줍쇼!<small>'+(p.id===myId ? "탭하면 포기 (다시 못 해요)" : "탭해서 $"+(room.tribute-p.money+ALMS)+" 적선 (상납금 메꿔 주고 $"+ALMS+" 남게)")+"</small></button>";
     }
     begBar.innerHTML = html;
   }
@@ -1499,23 +1507,24 @@
   const ranked = () => room.players.slice().sort((a,b) => lnNet(b)-lnNet(a));
   const moneyRow = (p, i, mid) => '<div class="row'+(p.id===myId?" mine":"")+'"><span class="rank">'+(["🥇","🥈","🥉"][i] || (i+1)+"위")+'</span><span class="mk" style="color:'+PCOL[p.color]+'">'+MARKS[p.color]+'</span><img src="'+avatarURL(p.look)+'" alt=""><span class="grow">'+esc(p.name)+"</span>"+mid+'<span class="odds">$'+p.money+"</span></div>";
   function renderNight(){
-    const my = me(), last = room.day >= room.days;
-    $("night-title").textContent = "🌙 DAY " + room.day + " 정산";
+    const my = me(), last = room.day >= room.days, T = room.tribute, short = my.money <= T;
+    $("night-title").textContent = "🌙 DAY " + room.day + " 정산 · 🚬 상납금 $" + T;
     $("night-rows").innerHTML = ranked().map((p,i) => {
       const n = room.night[p.id] || {delta:0, wage:0};
-      const tag = n.wage ? '<span class="tag mine">⛏️ 탄광 일당</span>' : p.money > 0 ? "" :
-        p.begging ? '<span class="tag bad">🥺 구걸 중</span>' : p.begged ? '<span class="tag bad">구걸 실패…</span>' : '<span class="tag bad">💸 파산</span>';
+      const tag = (n.wage ? '<span class="tag mine">⛏️ 탄광 일당</span>' : "") + (p.money > T ? "" :
+        p.begging ? '<span class="tag bad">🥺 구걸 중</span>' : p.begged ? '<span class="tag bad">구걸 실패…</span>' : '<span class="tag bad">💸 상납금 부족</span>');
       return moneyRow(p, i, tag+'<span class="'+(n.delta>0?"plus":n.delta<0?"minus":"")+'">'+(n.delta>=0?"+":"−")+"$"+Math.abs(n.delta)+"</span>"+(p.ready ? '<span class="rdy" style="color:var(--good)">✔</span>' : ""));
     }).join("");
-    $("night-note").textContent = my.money > 0 ? (room.players.some((p) => p.begging) ? "구걸 중인 친구의 말풍선을 누르면 $"+ALMS+"을 건넬 수 있어요. 모른 척 넘어가도 됩니다 😈" : "") :
-      last ? "마지막 날에 파산이라니…" :
-      my.begging ? "누군가 적선해 주길 기다리는 중… 아무도 안 주면 내일은 아오지 탄광행입니다." :
-      my.begged ? "내일은 아오지 탄광에서 일합니다. (게임은 관전만, 캔 만큼 밤에 일당 $100~1000)" :
-      "파산! 아래 한푼줍쇼 버튼은 딱 한 번만 누를 수 있어요. 그냥 넘어가면 바로 탄광행.";
+    $("night-note").textContent = !short ? (room.players.some((p) => p.begging) ? "구걸 중인 친구의 말풍선을 누르면 모자란 상납금을 대신 내 주고 $"+ALMS+"을 쥐여 줄 수 있어요. 모른 척 넘어가도 됩니다 😈" :
+        "모두 넘어가면 사채업자가 상납금 $"+T+"을 걷어 갑니다."+(last ? "" : " (내일 밤엔 $"+(T+T/room.day)+")")) :
+      last ? "마지막 밤인데 상납금이 모자라요… 있는 돈을 다 뺏기고 끌려갑니다." :
+      my.begging ? "누군가 적선해 주길 기다리는 중… 아무도 안 주면 있는 돈을 다 뺏기고 내일은 아오지 탄광행입니다." :
+      my.begged ? "상납금을 못 내서 내일은 아오지 탄광에서 일합니다. (게임은 관전만, 캔 만큼 밤에 일당 $100~1000)" :
+      "상납금 $"+T+"이 모자라요! (내고 나면 $0) 한푼줍쇼는 딱 한 번, 사채로 메꿔도 돼요. 그냥 넘어가면 다 뺏기고 탄광행.";
     const b = $("btn-night");
-    b.textContent = my.ready ? "대기 중… (취소)" : last ? "최종 결과 보기 ▶" : my.money === 0 && !my.begged ? "포기하고 탄광 가기 ▶" : "다음 날로 ▶";
+    b.textContent = my.ready ? "대기 중… (취소)" : last ? "상납하고 최종 결과 보기 ▶" : short && !my.begged ? "포기하고 탄광 가기 ▶" : "상납하고 다음 날로 ▶";
     b.classList.toggle("on", my.ready);
-    b.hidden = my.money === 0 && my.begged; // 구걸해 본 파산자는 자동으로 준비 상태
+    b.hidden = short && my.begged; // 구걸해 본(상납금이 모자란) 사람은 자동으로 준비 상태
     if(!chartAnim) drawChart($("night-chart"), null);
   }
   function renderFinal(){
@@ -1547,7 +1556,7 @@
     if(!night) return;
     const my = me(), d = my.lnDebt || 0, last = room.day >= room.days, btn = (a) => $("ln-panel").querySelector('[data-ln="'+a+'"]');
     $("ln-info").textContent = (d ? "빚 $"+d+" · " : "") + (last ? "마지막 밤 · 순위는 현금 − 빚이라 갚아도 순자산은 같아요" :
-      (my.money === 0 && !my.begged ? "구걸 대신 빌리면 탄광 면제! · " : "") + "이자 하루 20% 복리 (오늘 빌린 돈은 내일 밤부터) · 한도 $"+LN_LIMIT);
+      (my.money <= room.tribute ? "상납금이 모자라면 빌려서 내도 돼요 (탄광 면제) · " : "") + "이자 하루 20% 복리 (오늘 빌린 돈은 내일 밤부터) · 한도 $"+LN_LIMIT);
     btn("borrow").disabled = d+100 > LN_LIMIT;
     btn("repay").disabled = btn("repayAll").disabled = !d || my.money <= 0;
     btn("repayAll").textContent = d && my.money < d ? "가진 돈 다 갚기" : "전액 갚기";
@@ -1590,6 +1599,47 @@
     g.font = "800 "+fs+"px Rubik, sans-serif"; const hw = g.measureText(txt).width/2+fs*0.55+4; // pill 반폭 + 여백: 화면 가장자리에서 안 잘리게 (꼬리는 사채업자 위 그대로)
     pill(g, clamp(sx, hw, W-hw), ty, txt, "#fff", fin || d >= 600 ? "#b0182c" : "#161320", fs);
     g.fillStyle = "#fff"; g.beginPath(); g.moveTo(sx-4, ty+fs*0.78); g.lineTo(sx+4, ty+fs*0.78); g.lineTo(sx, ty+fs*0.78+6); g.fill();
+  }
+
+  // ---------- 상납금 ----------
+  // 서버가 밤 정산 뒤(전원 준비) 상납금을 걷고 phase "tribute"(7초)를 연다. room.trib = {day, amt, paid:{id:$}, dragged:[id]}
+  // 장면: 사채업자 두목이 걸어 들어와 → 돈을 걷고 → 못 낸 사람을 밧줄로 묶어 → 줄줄이 끌고 나간다
+  let trT0 = 0, trFx = {}; // 장면 시작 시각(ms), 한 번만 낼 효과음 표시
+  function renderTrib(){
+    const t = room.trib, last = room.day >= room.days;
+    $("trib-title").textContent = "🚬 사채업자 수금 — 상납금 $" + t.amt;
+    $("trib-rows").innerHTML = ranked().map((p, i) => moneyRow(p, i, (t.dragged.includes(p.id) ? '<span class="tag bad">⛓️ '+(last ? "끌려감" : "아오지 탄광행")+"</span>" : "")+'<span class="minus">−$'+(t.paid[p.id] || 0)+"</span>")).join("");
+  }
+  // 두목: 부하(LN_LOOK)와 같은 검은 정장을 drawPerson으로 그리고, 위에 페도라·콧수염·굵은 눈썹·장미·입에 문 시가(연기)를 얹는다. 부하보다 크게(su)
+  const TR_LOOK = {top:LN_LOOK.top, bottom:LN_LOOK.bottom, hair:0, hairColor:0, skin:1};
+  function trBoss(g, x, y, su, now, pose, walk){
+    const bob = walk ? Math.abs(S(now*9))*0.7*su : 0, by = S((now+7)*2.2)*0.12, hy = 16+by; // by = drawPerson의 숨쉬기 (idle·wave는 머리도 같이 움직인다)
+    drawPerson(g, TR_LOOK, x, y-bob, su, pose, now, 7);
+    g.save(); g.translate(x, y-bob); g.scale(su, su); g.translate(-3, 0);
+    drawBox(g,1.6,6.4+by,0.5,2.8,4.6,0,"#3a3440"); drawBox(g,2.1,8.2+by,0.5,1.8,2.8,0,"#f2f2ee"); drawBox(g,2.65,6.6+by,0.5,0.7,4.2,0,"#b0182c"); // 조끼 + 흰 셔츠 + 넥타이
+    drawBox(g,4.5,9.4+by,0.4,1,1,0,"#d8263a"); // 가슴에 꽂은 장미
+    drawBox(g,1.1,14.3+by,-0.3,1.9,0.6,0,K); drawBox(g,3,14.3+by,-0.3,1.9,0.6,0,K); // 굵은 눈썹
+    drawBox(g,1.3,12.5+by,-0.3,3.4,0.7,0,"#2a1a14"); // 콧수염
+    drawBox(g,-0.8,hy-0.8,-1.4,7.6,0.7,6.6,"#2b2830"); drawBox(g,0.3,hy-0.1,-0.2,5.4,2.8,4.4,"#2b2830"); drawBox(g,0.3,hy-0.1,-0.25,5.4,0.8,0,"#8a1c2c"); // 페도라 (챙·몸통·띠)
+    drawBox(g,3.6,11.8+by,-0.8,3.6,1,0.7,"#6b3f1f"); drawBox(g,4.4,11.8+by,-0.85,0.5,1,0,"#d4a017"); // 시가 + 금띠
+    drawBox(g,7.2,11.8+by,-0.8,0.6,1,0.7,S(now*1.7) > 0.4 ? "#ffb347" : "#e0432a"); // 빨갛게 타는 끝
+    for(let k=0;k<4;k++){ const f = (now*0.45+k/4)%1; g.fillStyle = "rgba(210,210,220,"+(0.4*(1-f))+")"; g.beginPath(); g.arc(7.8+f*2.2+S(now*2+k)*0.5, -(13.2+by)-f*7, 0.4+f*1.4, 0, T); g.fill(); } // 연기
+    g.restore();
+    return {x:x+3.8*su, y:y-bob-17.7*su}; // 오른손 (wave 포즈일 때 치켜든 손) — 돈 받는 손 / 밧줄 쥐는 손
+  }
+  function trSay(g, x, y, txt, fs, red){
+    g.font = "800 "+fs+"px Rubik, sans-serif"; const hw = g.measureText(txt).width/2+fs*0.55+4;
+    pill(g, clamp(x, hw, W-hw), y, txt, "#fff", red ? "#b0182c" : "#161320", fs);
+    g.fillStyle = "#fff"; g.beginPath(); g.moveTo(x-4, y+fs*0.78); g.lineTo(x+4, y+fs*0.78); g.lineTo(x, y+fs*0.78+6); g.fill();
+  }
+  const trEase = (f) => { f = clamp(f, 0, 1); return f*f*(3-2*f); };
+  const TR_ROPE = "#c8a064";
+  function trRope(g, cx, y, u, n){ // 묶인 사람 몸에 밧줄 n가닥(허리·가슴(팔까지)·다리). drawPerson과 같은 좌표계
+    g.save(); g.translate(cx, y); g.scale(u, u); g.translate(-3, 0);
+    if(n > 0) drawBox(g,-0.15,5.9,0.35,6.3,0.9,3.3,TR_ROPE);
+    if(n > 1) drawBox(g,-1.9,8.4,0.3,9.8,0.8,3.4,TR_ROPE);
+    if(n > 2) drawBox(g,0.2,2,0.6,5.8,0.7,2.6,TR_ROPE);
+    g.restore();
   }
 
   // 경주 중 실시간 순위 (loop에서 0.25초마다 갱신)
@@ -3260,10 +3310,44 @@
       g.fillStyle = "#5a3a1a"; g.fillRect(fx-2.5*u, fy, 5*u, u); g.fillRect(fx-1.8*u, fy-0.6*u, 3.6*u, 0.8*u);
       for(let k=0;k<3;k++) if(R() < dt*40) emit(null, fy-u, {x:fx+(R()-0.5)*2.4*u, fire:1, vx:(R()-0.5)*14, vy:-40-R()*50, life:0.5+R()*0.4, w:u*(1.2+R()*1.2), grow:-u*2, spin:3});
     } else if(R() < dt*1.6) fireworks();
+    // 사채업자 두목: 밤엔 뒤쪽 오른편에서 기다리다가, 수금 장면(tribute)에선 걸어 나와 돈을 걷고(1.2~3.2초) 묶고(~4.2초) 끌고 나간다(~6.8초)
+    const tr = room.phase === "tribute" && room.trib, tt = tr ? (performance.now()-trT0)/1000 : 0, last = room.day >= room.days;
+    const su = u*1.15, fs = clamp(u*2.3, 10, 14), home = {x: W-6*su, y: H-10-7*u};
+    const drg = tr ? tr.dragged.filter((id) => room.players.some((p) => p.id === id)) : []; // 끌려가는 사람 (왼쪽부터 = 두목에 가까운 순)
+    let bx = home.x, bgy = home.y, walk = false;
+    if(tr){
+      const a = trEase(tt/1.2), out = trEase((tt-4.2)/2.6);
+      const mx = W/2+(n%2 ? gap/2 : 0); // 모닥불 자리 = 사람 사이 (가운데 사람과 안 겹치게)
+      bx += (mx-home.x)*a; bgy += (H-4-home.y)*a;
+      if(tt > 4.2) bx = mx+((drg.length ? -6*su-drg.length*9*u : W+6*su)-mx)*out; // 끌고 왼쪽으로 / 아무도 없으면 오른쪽으로 퇴장
+      walk = tt < 1.2 || (tt > 4.2 && out < 1);
+    }
+    const hand = {x: bx+3.8*su, y: bgy-17.7*su}, coins = [], ropes = [];
+    if(!fin && !tr){ // 밤: 사람들 뒤에 서서 오늘 상납금을 알린다
+      trBoss(g, bx, bgy, su, now, "idle", false);
+      if(now%5 < 3.5) trSay(g, bx, Math.max(fs, bgy-21*su), now%10 < 5 ? "오늘 밤 상납금 $"+room.tribute : "못 내면… 알지? 🚬", fs, now%10 >= 5);
+    }
     room.players.forEach((p, i) => {
       const rank = order.indexOf(p), nt = (room.night && room.night[p.id]) || {delta:0, wage:0};
       let cx = W/2+(i-(n-1)/2)*gap, y = H-10;
       if(!fin) y -= 1.4*u;
+      if(tr){ // 수금 장면: 동전이 두목 손으로 날아가고, 못 낸 사람은 묶여서 두목 뒤로 줄줄이 끌려간다
+        const dk = drg.indexOf(p.id), paid = tr.paid[p.id] || 0, at = 2+i*0.2; // at = 동전이 손에 닿는 시각
+        if(paid) coins.push({x: cx, y: y-12*u, at});
+        if(tt >= at && !trFx["c"+i]){ trFx["c"+i] = 1; if(paid) sfxCoin(); }
+        let rot = 0;
+        if(dk >= 0){ cx += (bx+(dk+1)*9*u-cx)*trEase((tt-4.2)/0.7); rot = 0.28*trEase((tt-4.2)/0.4); } // 버티느라 뒤로 젖힌다
+        g.save(); g.translate(cx, y); g.rotate(rot); g.translate(-cx, -y);
+        drawPerson(g, p.look, cx, y, u, dk >= 0 || (paid && tt >= at) ? "sad" : "idle", now, i*1.7);
+        if(dk >= 0) trRope(g, cx, y, u, tt < 3.2 ? 0 : Math.floor((tt-3.2)/0.3)+1);
+        g.restore();
+        if(dk >= 0) ropes[dk] = {x: cx+6.4*u*Math.sin(rot), y: y-6.4*u*Math.cos(rot)};
+        const lines = [["$"+(tt < at ? p.money+paid : p.money), "#ffdd7a"], [p.name, PCOL[p.color]]];
+        if(paid && tt >= at) lines.unshift(["−$"+paid, "#ff5d72"]);
+        if(dk >= 0 && tt >= 3.2) lines.unshift(["⛓️ "+(last ? "끌려감" : "아오지행"), "#ff5d72"]);
+        personLabel(g, p, cx+18*u*Math.sin(rot), y-21*u, clamp(u*3.2, 11, 16), lines.reverse());
+        return;
+      }
       if(fin){ // 시상대: 순위가 높을수록 높다
         cx = W/2+([0,-1,1,2][rank] !== undefined ? [0,-1,1,2][rank] : rank)*gap*0.9;
         const ph = (n-rank)*2.2*u;
@@ -3277,9 +3361,30 @@
       const lines = [["$"+(p.money-nt.delta+shown), "#ffdd7a"], [p.name, PCOL[p.color]]];
       if(!fin && shown) lines.unshift([(shown>0?"+":"−")+"$"+Math.abs(shown), shown>0 ? "#7bd88f" : "#ff5d72"]);
       personLabel(g, p, cx, y-(pose === "beg" ? 17 : 21)*u-(rank === 0 ? 2.5*u : 0), clamp(u*3.2, 11, 16), lines.reverse());
-      lnShark(g, p, cx, y, u, gap, now, i, fin); // 빚이 있으면 사채업자가 옆에 붙는다
+      lnShark(g, p, cx, y, u, gap, now, i, fin); // 빚이 있으면 사채업자(부하)가 옆에 붙는다
       if(fin) ttStamp(g, p, cx, y-21*u-(rank === 0 ? 2.5*u : 0)-lines.length*clamp(u*3.2, 11, 16)*1.2, clamp(u*3.2, 11, 16), gap*0.9-6); // 시상식 칭호 도장
     });
+    if(tr){
+      for(const c of coins){ // 동전: 머리 위에서 두목 손으로 포물선
+        const f = (tt-(c.at-0.7))/0.7;
+        if(f < 0 || f >= 1) continue;
+        const x = c.x+(hand.x-c.x)*f, y = c.y+(hand.y-c.y)*f-S(f*PI)*8*u;
+        g.fillStyle = "#ffd447"; g.strokeStyle = "#a8791a"; g.lineWidth = Math.max(1, u*0.4); g.beginPath(); g.arc(x, y, 1.5*u, 0, T); g.fill(); g.stroke();
+        g.fillStyle = "#a8791a"; g.font = "800 "+Math.round(2.2*u)+"px Rubik, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("$", x, y+u*0.1);
+      }
+      if(drg.length && tt >= 3.2 && !trFx.tie){ trFx.tie = 1; tone(260,0.12,"square",0.06,180); tone(220,0.12,"square",0.06,150,0.3); tone(200,0.12,"square",0.06,130,0.6); } // 꽉 꽉 꽉 (묶기)
+      if(drg.length && tt >= 4.2 && !trFx.drag){ trFx.drag = 1; tone(98,1.2,"sawtooth",0.1,55); if(actx) drum(actx.currentTime, 0.3, 0.08, 400); } // 질질
+      trBoss(g, bx, bgy, su, now, tt > 1.2 ? "wave" : "idle", walk);
+      if(drg.length && tt >= 4){ // 두목 손 → 첫 사람 허리 → 다음 사람 허리… 밧줄 한 줄
+        g.strokeStyle = TR_ROPE; g.lineWidth = Math.max(1.5, u*0.45); g.beginPath(); g.moveTo(hand.x, hand.y);
+        let a = hand;
+        for(const b of ropes){ if(!b) continue; g.quadraticCurveTo((a.x+b.x)/2, Math.max(a.y, b.y)+2*u, b.x, b.y); a = b; }
+        g.stroke();
+      }
+      const say = tt < 1.2 ? "상납금 걷으러 왔다." : tt < 3.2 ? "$"+tr.amt+"씩. 빠짐없이." : !drg.length ? "착하군. 내일 밤에 또 보지." :
+        tt < 4.2 ? "돈이 없다고? 몸으로 갚아라." : last ? "평생 내 밑에서 일해라." : "아오지 탄광에서 보자고.";
+      if(bx > -4*su && bx < W+4*su) trSay(g, bx, Math.max(fs, bgy-21*su), say, fs, drg.length && tt >= 3.2);
+    }
     stepParticles(dt, null);
   }
 
@@ -3523,13 +3628,13 @@
   let mnRockV = {n:0, hp:1, max:1}, mnParts = [], mnGeo = null, mnSwing = -9, mnLast = 0, mnBorn = -9, mnShown = 0;
   function mnRender(){
     const my = me();
-    $("mn-panel").hidden = !my.mining;
+    $("mn-panel").hidden = !my.mining || room.phase === "tribute"; // 수금 장면에서 끌려간 사람은 내일부터 캔다
     room.players.forEach((p, i) => { const chip = $("hud-players").children[i]; if(p.mining && chip) chip.insertAdjacentHTML("beforeend", '<span class="mn-earn">$'+(p.mnEarn||0)+"</span>"); }); // HUD 칩: ⛏️$340
     if(room.phase === "night") ranked().forEach((p, i) => { // 정산표 "⛏️ 탄광 일당" 태그에 금액 (+ 다이아 캤으면 💎). 행 순서 = renderNight의 ranked()
       const n = room.night[p.id], row = $("night-rows").children[i], tag = row && row.querySelector(".tag.mine");
       if(n && n.wage && tag) tag.textContent = "⛏️ 탄광 일당 $"+n.wage+(n.mnDia ? " 💎" : "");
     });
-    if(!my.mining) return;
+    if($("mn-panel").hidden) return;
     mnRockV = my.mnRock || {n:0, hp:1, max:1};
     const full = (my.mnEarn||0) >= MN_MAX-MN_BASE;
     mnBtn.disabled = full;
@@ -3702,6 +3807,7 @@
     if(screens.game.hidden){ if(BW){ drawHome(ts/1000, dt); if(room && room.phase === "lobby") drawLobbyPeople(ts/1000); } return; }
     if(!room || !W) return;
     if(!$("mn-panel").hidden) mnDraw(ts/1000, dt);
+    if(room.phase === "tribute") return drawNight(ts, dt);
     if(room.phase === "night" || room.phase === "final"){
       if(chartAnim){ // 그래프가 0일차부터 자라난다
         const days = Math.max(1, room.day), fin = room.phase === "final", pr = chartProgress(days, fin);

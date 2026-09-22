@@ -1,7 +1,8 @@
 // 뒷방 한탕 - 서버 기반 4인 베팅 게임 (wasd-tori-server와 같은 뼈대: Node 내장 모듈만 사용)
 // 메타: 각자 $1000으로 시작해 방장이 정한 날수(기본 7일) 동안 가장 많이 불린 사람이 우승.
 //   투표 = 랜덤 3개 게임 + 무작위 중에서 골라 득표 비례 확률로 추첨 → 낮 = 그날의 도박 컨텐츠 → 밤 = 정산.
-//   밤에 파산($0)이면 한푼줍쇼 1회(또는 사채). 아무도 안 주면 다음 날은 아오지 탄광(게임은 관전, 곡괭이질 미니게임) → 그날 밤 일당 $100 + 캔 돈(최대 $1000).
+//   모두 사채업자에게 빚진 신세라 밤마다 상납금($30 × DAY)을 바친다. 못 내면(가진 돈 ≤ 상납금) 한푼줍쇼 1회(또는 사채)로 메꾸고,
+//   그래도 모자라면 있는 돈을 다 뺏기고 다음 날은 아오지 탄광(게임은 관전, 곡괭이질 미니게임) → 그날 밤 일당 $100 + 캔 돈(최대 $1000).
 // 서버가 돈/베팅/경주 결과를 전부 소유한다. 경주는 출발 순간 서버가 끝까지 미리 시뮬레이션해서
 // 프레임 통째로 내려주고, 클라이언트는 재생만 한다. (베팅은 이미 잠긴 뒤라 결과를 미리 알아도 쓸 데가 없다)
 
@@ -48,7 +49,7 @@ const wss = new WSServer({ server });
 // ---------- 규격 ----------
 const MAX_PLAYERS = 4;
 const START_MONEY = Number(process.env.START_MONEY) || 1000; // 테스트할 땐 START_MONEY=300 처럼 낮추면 파산·탄광 흐름을 빨리 볼 수 있다
-const ALMS = 100; // 한푼줍쇼 한 번에 건네는 돈
+const ALMS = 100; // 한푼줍쇼: 적선하면 상납금을 대신 메꿔 주고 이만큼 남게 해 준다 (적선액 = 상납금 − 가진 돈 + ALMS)
 const DAYS = Number(process.env.DAYS) || 7; // 새 방의 기본 진행 일수. 방장이 대기실에서 바꾼다 (1~MAX_DAYS)
 const MAX_DAYS = 30;
 const WAGE = 100; // 아오지 탄광 기본 일당 (+ 그날 캔 돈, 합계 최대 MN_MAX → 탄광 미니게임)
@@ -268,7 +269,7 @@ function broadcastRoom(room) {
   broadcast(room, {
     type: "room",
     room: { code: room.code, title: room.title, phase: room.phase, day: room.day, days: room.days, game: room.game, cap: room.cap,
-      entrants: room.entrants, result: room.result, night: room.night, players: [...room.players.values()],
+      entrants: room.entrants, result: room.result, night: room.night, tribute: trAmt(room), trib: room.trib, players: [...room.players.values()],
       dice: room.dice,
       ip: room.ip && ipView(room.ip), // 카드·결정은 공개 전까지 절대 내보내지 않는다
       bl: room.bl && { round: room.bl.round, rounds: room.bl.rounds, rate: BL_RATE, max: BL_MAX, ff: BL_FF, elapsed: Date.now() - room.bl.t0, cash: room.bl.cash, crash: room.bl.crash, ffAt: room.bl.ffAt }, // hidden(터지는 배수)은 절대 내보내지 않는다
@@ -376,6 +377,7 @@ function startDay(room, key) {
   if (room.bl) sys(room, "🎈 터지기 전에 놓으면 그때 배수만큼! 못 놓고 터지면 판돈 전액 잃음 (최대 x" + BL_MAX + ")");
   if (room.cn) sys(room, "🪙 " + (CN_TICKS * CN_TICK) / 1000 + "초 장 · 현금으로 시작, 매수 = 전액 코인 / 매도 = 전액 현금 (거래마다 수수료 " + CN_FEE * 100 + "%, 마감 때 자동 매도)");
   if (room.au) sys(room, "🎁 몰래 입찰 → 최고가 1명만 입찰가를 내고 상자를 가져가요 · 각자 비밀 힌트가 하나씩");
+  sys(room, "🚬 오늘 밤 상납금 $" + trAmt(room) + " — 못 내면(가진 돈 ≤ 상납금) 사채업자가 아오지 탄광으로 끌고 갑니다");
   if (room.pk) sys(room, "🔴 공이 떨어질 구역을 맞히면 배당만큼 · " + PK_ODDS.map((o, z) => ["중앙", "외곽", "최외곽"][z] + " x" + o).join(" · "));
   broadcastRoom(room);
   if (room.au) room.players.forEach((_, ws) => auSendMe(room, ws)); // 비밀 힌트는 각자에게만
@@ -1205,7 +1207,7 @@ function diceSettle(room) {
 function startNight(room) {
   room.phase = "night";
   room.night = {};
-  sys(room, "🌙 DAY " + room.day + " 밤 — 정산 시간");
+  sys(room, "🌙 DAY " + room.day + " 밤 — 정산 시간 · 🚬 상납금 $" + trAmt(room));
   for (const p of room.players.values()) {
     const wage = p.mining ? WAGE + (p.mnEarn || 0) : 0; // 탄광 일당 = 기본 + 오늘 캔 돈 (한도는 캘 때 이미 잘라 둠)
     p.money += wage;
@@ -1217,21 +1219,48 @@ function startNight(room) {
     if (wage) room.night[p.id].mnDia = p.mnDia || 0; // 탄광에서 다이아를 캤으면 정산표에 💎
     Object.assign(p, { mnEarn: 0, mnDia: 0, mnRock: null }); // 오늘 채굴 기록은 일당으로 바꿨으니 초기화
     if (wage) sys(room, "⛏️ " + p.name + " 탄광 일당 +$" + wage);
-    if (p.money === 0) sys(room, "💸 " + p.name + " 파산! 한푼줍쇼는 딱 한 번…");
+    if (p.money <= trAmt(room)) sys(room, "💸 " + p.name + " 상납금이 모자라요! 한푼줍쇼는 딱 한 번…");
     if (p.money === 0) ttOf(p).bankrupt++; if (wage) ttOf(p).mined++; // 시상식 칭호 통계
   }
   broadcastRoom(room);
 }
 
-// 파산자는 구걸을 한 번 해봤으면 더 할 게 없으니 준비된 걸로 친다 (나머지가 적선할지 말지 정하고 넘어간다)
+// ---------- 상납금 ----------
+// 모두 사채업자에게 빚진 신세. 밤 정산이 끝나면(전원 준비) 사채업자가 와서 상납금 = TR_BASE × DAY를 걷는다 (7일차 $210, 14일차 $420).
+// 못 내면(가진 돈 ≤ 상납금 → 내고 나면 $0) 있는 돈을 다 뺏기고 끌려가 다음 날은 탄광. 마지막 밤엔 뺏기기만 한다(다음 날이 없다).
+// 밤 동안엔 구걸(적선 = 상납금 − 가진 돈 + ALMS → 내고 나도 $100이 남는다)이나 사채로 메꿀 수 있다. 사채 빚(p.lnDebt)과는 별개.
+// 수금 장면(phase "tribute", TR_MS) 동안 클라이언트가 걷고 끌고 가는 연출을 하고, 끝나면 투표(또는 최종 결과).
+const TR_BASE = 30;
+let TR_MS = 7000; // --check에선 0 → 장면 없이 바로 넘어간다
+const trAmt = (room) => TR_BASE * room.day;
+
+// 상납금이 모자란 사람은 구걸을 한 번 해봤으면 더 할 게 없으니 준비된 걸로 친다 (나머지가 적선할지 말지 정하고 넘어간다)
 function checkNightReady(room) {
   if (room.phase !== "night" || room.players.size === 0) return;
+  const T = trAmt(room);
   for (const p of room.players.values()) if (p.rcAway) p.ready = true; // 재접속: 끊긴 사람(📴)은 자동 준비
-  for (const p of room.players.values()) if (!p.ready && !(p.money === 0 && p.begged)) return;
+  for (const p of room.players.values()) if (!p.ready && !(p.money <= T && p.begged)) return;
+  room.phase = "tribute";
+  room.trib = { day: room.day, amt: T, paid: {}, dragged: [] };
+  sys(room, "🚬 사채업자 등장 — 상납금 $" + T + " 걷어 가겠다.");
   for (const p of room.players.values()) {
     p.begging = false;
-    if (p.money === 0 && room.day < room.days) { p.mining = true; sys(room, "⛏️ " + p.name + " → 아오지 탄광행 (내일은 관전만)"); }
+    const paid = Math.min(p.money, T);
+    p.money -= paid;
+    room.trib.paid[p.id] = paid;
+    p.history[room.day] = lnNet(p);
+    if (p.money > 0) continue;
+    room.trib.dragged.push(p.id);
+    if (room.day < room.days) p.mining = true;
+    sys(room, "⛓️ " + p.name + (paid < T ? " 상납금 못 냄" : " 빈털터리") + " → " + (room.day < room.days ? "아오지 탄광행 (내일은 관전만)" : "끌려감…"));
   }
+  broadcastRoom(room);
+  if (!TR_MS) return trDone(room);
+  room.timer = setTimeout(() => trDone(room), TR_MS);
+}
+
+function trDone(room) {
+  if (room.phase !== "tribute") return;
   if (room.day < room.days) return startVote(room);
   room.phase = "final";
   ttAward(room); // 시상식 칭호
@@ -1243,7 +1272,7 @@ function checkNightReady(room) {
 // ---------- 사채 ----------
 // 밤에만 $100씩 빌리고 갚는다. 빚(p.lnDebt, 원금+이자)이 $1000을 넘게는 못 빌린다. 빌린 돈은 바로 money에.
 // 이자는 매일 밤 정산(startNight) 때 기존 빚에 20% 복리. 빌리는 건 정산이 끝난 밤이라 그날 밤엔 안 붙고 다음 밤부터 붙는다.
-// 파산 판정은 그대로 money === 0 → 파산자가 빌리면 checkNightReady가 알아서 탄광에 안 보낸다. 순위·그래프는 순자산(money − 빚).
+// 상납금이 모자란 사람이 빌려서 메꾸면 checkNightReady가 알아서 탄광에 안 보낸다 (빚으로 상납금을 내는 셈). 순위·그래프는 순자산(money − 빚).
 const LN_UNIT = 100;
 const LN_LIMIT = 1000;
 const LN_RATE = 20; // 하루 이자(%). 정수로 계산해야 120 × 0.2 같은 부동소수 오차에 ceil이 1 더 붙지 않는다
@@ -1276,7 +1305,7 @@ function lnAct(room, me, a) {
     sys(room, "💀 " + me.name + " 사채 $" + amt + " 갚음 (" + (me.lnDebt ? "남은 빚 $" + me.lnDebt : "완납!") + ")");
   } else return;
   broadcastRoom(room); // 순자산은 그대로라 그래프(history)는 안 바뀐다
-  checkNightReady(room); // 파산자가 다 갚고 다시 $0이 된 경우(구걸해 봤으면 자동 준비)
+  checkNightReady(room); // 상납금이 모자란 사람이 갚다가 다시 모자라진 경우(구걸해 봤으면 자동 준비)
 }
 
 // ---------- 탄광 미니게임 ----------
@@ -1304,7 +1333,7 @@ function mnLoot(n) {
 }
 
 function mnHit(ws, room, me) {
-  if (!me.mining || ["lobby", "vote", "night", "final"].includes(room.phase)) return; // 탄광 가는 날 낮에만
+  if (!me.mining || ["lobby", "vote", "night", "tribute", "final"].includes(room.phase)) return; // 탄광 가는 날 낮에만
   const now = Date.now(), left = MN_MAX - WAGE - (me.mnEarn || 0);
   ws.mnHits = (ws.mnHits || []).filter((t) => now - t < 1000); // 최근 1초 동안의 타격 시각
   if (ws.mnHits.length >= MN_RATE || left <= 0) return; // 너무 빠르거나 한도를 다 채웠으면 무시
@@ -1399,7 +1428,7 @@ function joinRoom(ws, room, name) {
   ws.room = room;
   // history[d] = d일차 밤의 자산 (0 = 시작). 도중 입장이면 그 전날까지는 null, 밤에 들어왔으면 오늘 값도 채운다 → 밤 그래프용
   const history = Array(Math.max(0, room.day - 1)).fill(null).concat(START_MONEY);
-  if (room.phase === "night" || room.phase === "final") history[room.day] = START_MONEY;
+  if (["night", "tribute", "final"].includes(room.phase)) history[room.day] = START_MONEY;
   room.players.set(ws, { id: ws.id, name: cleanName(name), color, look: pickLook(room), money: START_MONEY, dayStart: START_MONEY, history,
     ready: false, begging: false, begged: false, mining: false, bets: {} });
   room.players.get(ws).ttStats = ttNew(); // 시상식 칭호 통계 (도중 입장자도 빈 통계로. 나갔다 온 사람은 아래 rcJoin이 되돌린다)
@@ -1488,7 +1517,7 @@ function handleMessage(ws, msg) {
     broadcast(room, { type: "chat", id: me.id, name: me.name, color: me.color, text });
   } else if (msg.type === "again") {
     if (room.phase !== "final") return;
-    Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null });
+    Object.assign(room, { phase: "lobby", day: 0, game: null, entrants: null, bj: null, dice: null, pg: null, race: null, result: null, night: null, vote: null, trib: null });
     room.nc = null;
     room.ip = null;
     room.au = null;
@@ -1542,9 +1571,9 @@ function handleMessage(ws, msg) {
   } else if (msg.type === "bj") {
     bjAction(room, me, msg.a);
   } else if (msg.type === "beg") {
-    // 밤 정산 때 파산한 사람만, 하룻밤에 딱 한 번. (취소하면 기회는 날아간다)
+    // 밤 정산 때 상납금을 못 내는(가진 돈 ≤ 상납금) 사람만, 하룻밤에 딱 한 번. (취소하면 기회는 날아간다)
     if (room.phase !== "night") return;
-    if (msg.v && (me.money > 0 || me.begged)) return;
+    if (msg.v && (me.money > trAmt(room) || me.begged)) return;
     me.begging = !!msg.v;
     if (msg.v) { me.begged = true; sys(room, "🥺 " + me.name + ": 한푼 줍쇼!"); }
     if (msg.v) ttOf(me).begged++; // 시상식 칭호 통계
@@ -1553,16 +1582,17 @@ function handleMessage(ws, msg) {
   } else if (msg.type === "give") {
     const to = [...room.players.values()].find((p) => p.id === msg.to);
     if (!to || to === me || !to.begging) return;
-    if (me.money < ALMS) return send(ws, { type: "error", message: "적선할 돈($" + ALMS + ")이 없어요…" });
-    me.money -= ALMS;
-    to.money += ALMS;
+    const alms = trAmt(room) - to.money + ALMS; // 상납금 모자란 만큼 + $100 → 상납하고 나면 딱 $100이 남는다
+    if (me.money < alms) return send(ws, { type: "error", message: "적선할 돈($" + alms + ")이 없어요…" });
+    me.money -= alms;
+    to.money += alms;
     to.begging = false; // 누가 한 번 주면 그걸로 끝
     ttOf(me).given++; // 시상식 칭호 통계
     me.history[room.day] = me.money; // 적선은 밤에만 일어난다 → 오늘 밤 그래프에 반영
     to.history[room.day] = to.money;
     me.history[room.day] = lnNet(me); to.history[room.day] = lnNet(to); // 사채: 그래프는 순자산
-    sys(room, "🪙 " + me.name + " → " + to.name + " $" + ALMS + " 적선");
-    broadcast(room, { type: "toast", text: "🪙 " + me.name + " → " + to.name + " $" + ALMS + " 적선!", coin: true });
+    sys(room, "🪙 " + me.name + " → " + to.name + " $" + alms + " 적선");
+    broadcast(room, { type: "toast", text: "🪙 " + me.name + " → " + to.name + " $" + alms + " 적선!", coin: true });
     broadcastRoom(room);
   } else if (msg.type === "lnAct") {
     lnAct(room, me, msg.a);
@@ -1676,7 +1706,7 @@ function rcJoin(ws, room) {
   rcTokens.set(ws.rcToken, { room, id: p.id });
   if (!s) return;
   room.rcLeft.delete(ws.rcToken);
-  const upto = room.phase === "night" || room.phase === "final" ? room.day : room.day - 1;
+  const upto = ["night", "tribute", "final"].includes(room.phase) ? room.day : room.day - 1;
   for (let d = s.history.length; d <= upto; d++) s.history[d] = s.money - (s.lnDebt || 0); // 없던 동안은 순자산이 그대로였다
   Object.assign(p, { money: s.money, dayStart: s.money, history: s.history, look: s.look, lnDebt: s.lnDebt || 0, ttStats: s.ttStats || p.ttStats },
     s.day === room.day && { dayStart: s.dayStart, mining: s.mining, begged: s.begged, mnEarn: s.mnEarn, mnRock: s.mnRock });
@@ -1709,6 +1739,7 @@ setInterval(() => {
 
 // 셀프 체크: `node server.js --check` — 8마리 기본 승률표 출력 + 배당/정산 검증
 if (process.argv.includes("--check")) {
+  TR_MS = 0; // 상납금 수금 장면 없이 바로 다음 날 (장면 자체는 아래 상납금 체크에서 따로 본다)
   const all = ANIMALS.map((x, a) => ({ a, key: x.key, k: 1 }));
   const N = 20000, wins = all.map(() => 0);
   let dur = 0;
@@ -2254,7 +2285,61 @@ if (process.argv.includes("--check")) {
   B.money = 500; A.money = 0; A.begged = false;
   handleMessage(wa, { type: "beg", v: true });
   handleMessage(wb, { type: "give", to: A.id });
-  assert(A.history[2] === ALMS && B.history[2] === 400 && !A.begging, "적선은 그래프 기록에도 반영");
+  assert(A.history[2] === 60 + ALMS && B.history[2] === 500 - 60 - ALMS && !A.begging, "적선(상납금 $60 + $100)은 그래프 기록에도 반영");
+
+  { // 상납금: $30 × DAY · 모자라면(가진 돈 ≤ 상납금) 구걸 가능 · 적선은 상납 후 $100이 남게 · 사채로 메꿔도 됨 · 못 내면 다 뺏기고 탄광 → 일당 받고 다시 상납
+  TR_MS = 5000; // 수금 장면을 실제로 거쳐 본다
+  const tf = () => ({ id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} });
+  const t1 = tf(), t2 = tf(), t3 = tf(), t4 = tf();
+  handleMessage(t1, { type: "create", name: "R1" });
+  const tr = t1.room;
+  for (const [w, n] of [[t2, "R2"], [t3, "R3"], [t4, "R4"]]) handleMessage(w, { type: "join", id: tr.code, name: n });
+  handleMessage(t1, { type: "days", n: 3 });
+  process.env.GAME = "dice";
+  handleMessage(t1, { type: "start" });
+  const [R1, R2, R3, R4] = [t1, t2, t3, t4].map((w) => tr.players.get(w));
+  assert(trAmt(tr) === 30);
+  R1.money = 500; R2.money = 30; R3.money = 20; R4.money = 0; // R2는 딱 상납금만큼 → 내고 나면 $0이라 역시 못 버틴다
+  clearTimeout(tr.timer); startNight(tr);
+  handleMessage(t1, { type: "beg", v: true });
+  assert(!R1.begging, "상납금을 낼 수 있으면 구걸 불가");
+  for (const w of [t2, t3, t4]) handleMessage(w, { type: "beg", v: true });
+  assert(R2.begging && R3.begging && R4.begging && tr.phase === "night");
+  handleMessage(t1, { type: "give", to: R3.id });
+  assert(R3.money === 130 && R1.money === 390 && !R3.begging, "적선 = 상납금 − 가진 돈 + $100");
+  handleMessage(t2, { type: "lnAct", a: "borrow" });
+  assert(R2.money === 130 && !R2.begging, "사채로 메꾸면 구걸은 끝");
+  handleMessage(t1, { type: "ready", v: true });
+  handleMessage(t2, { type: "ready", v: true });
+  assert(tr.phase === "night", "R3는 적선을 받아 다시 모자라지 않으니 직접 준비해야 한다");
+  handleMessage(t3, { type: "ready", v: true }); // R4는 구걸해 봤고 여전히 모자라서 자동 준비
+  assert(tr.phase === "tribute" && tr.day === 1, "전원 준비 → 수금 장면");
+  assert.deepStrictEqual(tr.trib, { day: 1, amt: 30, paid: { [R1.id]: 30, [R2.id]: 30, [R3.id]: 30, [R4.id]: 0 }, dragged: [R4.id] });
+  assert(R1.money === 360 && R2.money === 100 && R3.money === 100 && R4.money === 0 && R4.mining && !R3.mining);
+  assert(R2.history[1] === 100 - 100 && R1.history[1] === 360, "그래프는 상납 후 순자산");
+  handleMessage(t4, { type: "mnHit" });
+  assert(!R4.mnRock, "수금 장면 동안엔 못 캔다");
+  clearTimeout(tr.timer); trDone(tr);
+  assert(tr.day === 2 && tr.phase === "betting" && R4.mining, "장면이 끝나면 다음 날, 끌려간 R4는 탄광");
+  R4.mnEarn = 50;
+  clearTimeout(tr.timer); startNight(tr);
+  assert(R4.money === WAGE + 50 && !R4.mining && trAmt(tr) === 60, "일당 받고 밤 (2일차 상납금 $60)");
+  R1.money = 60; R2.money = 61;
+  for (const w of [t1, t2, t3, t4]) handleMessage(w, { type: "ready", v: true });
+  assert(tr.phase === "tribute" && R4.money === 90 && R2.money === 1 && R1.money === 0 && R1.mining && tr.trib.dragged.join() === R1.id, "상납금 딱 맞게 내고 빈털터리가 되어도 탄광행");
+  clearTimeout(tr.timer); trDone(tr);
+  clearTimeout(tr.timer); startNight(tr); // 3일차(마지막) 밤: 상납금 $90, 못 내면 뺏기기만 하고 게임 끝
+  R3.money = 50;
+  for (const w of [t1, t2, t3, t4]) handleMessage(w, { type: "ready", v: true });
+  assert(tr.phase === "tribute" && R3.money === 0 && !R3.mining && tr.trib.dragged.includes(R3.id), "마지막 밤엔 탄광 없이 뺏기기만");
+  clearTimeout(tr.timer); trDone(tr);
+  assert(tr.phase === "final");
+  handleMessage(t1, { type: "again" });
+  assert(tr.trib === null);
+  TR_MS = 0;
+  delete process.env.GAME;
+  rooms.delete(tr.code);
+  }
 
   // 게임 투표: 없는 칸은 무시, 다 누르기 전엔 바꿀 수 있고 추첨도 안 돌고, 마지막 사람이 누르는 순간 추첨. 전원이 같은 칸이면 100% 그게 뽑힌다
   delete process.env.GAME;
@@ -2413,24 +2498,24 @@ if (process.argv.includes("--check")) {
   lnReady();
   assert(lr.day === 2 && !L1.mining, "파산자가 사채를 쓰면 탄광에 안 간다");
   clearTimeout(lr.timer); startNight(lr);
-  assert(L1.lnDebt === 360 && lr.night[L1.id].lnInt === 60 && L1.history[2] === 300 - 360, "다음 밤 20%");
+  assert(L1.lnDebt === 360 && lr.night[L1.id].lnInt === 60 && L1.history[2] === 270 - 360, "다음 밤 20% (어젯밤 상납금 $30은 빌린 돈으로 냄)");
   for (let k = 0; k < 9; k++) handleMessage(l1, { type: "lnAct", a: "borrow" });
-  assert(L1.lnDebt === 960 && L1.money === 900, "빚 $1000을 넘게는 못 빌림");
+  assert(L1.lnDebt === 960 && L1.money === 870, "빚 $1000을 넘게는 못 빌림");
   lnReady();
   clearTimeout(lr.timer); startNight(lr); // 3일차(마지막) 밤
   assert(L1.lnDebt === 960 + 192 && lr.night[L1.id].lnInt === 192, "복리");
   handleMessage(l1, { type: "lnAct", a: "repay" });
-  assert(L1.lnDebt === 1052 && L1.money === 800, "$100 갚기");
+  assert(L1.lnDebt === 1052 && L1.money === 710, "$100 갚기 (2일차 상납금 $60 뒤)");
   L1.money = 30;
   handleMessage(l1, { type: "lnAct", a: "repayAll" });
   assert(L1.lnDebt === 1022 && L1.money === 0, "돈이 모자라면 가진 만큼만");
   L1.money = 1100;
   handleMessage(l1, { type: "lnAct", a: "repayAll" });
   assert(L1.lnDebt === 0 && L1.money === 78, "전액 갚기");
-  handleMessage(l1, { type: "lnAct", a: "borrow" }); handleMessage(l1, { type: "lnAct", a: "borrow" }); // 마지막 밤: 현금 $278 / 빚 $200 → 순자산 $78 < L2 $900
+  handleMessage(l1, { type: "lnAct", a: "borrow" }); handleMessage(l1, { type: "lnAct", a: "borrow" }); // 마지막 밤: 현금 $278 − 상납금 $90 / 빚 $200 → 순자산 −$12 < L2 $900 − $30 − $60 − $90
   lnReady();
   const lastChat = JSON.parse(l1.log.filter((d) => d.includes('"chat"')).pop()).text;
-  assert(lr.phase === "final" && lastChat.includes("L2 ($900)"), "최종 우승은 순자산 기준: " + lastChat);
+  assert(lr.phase === "final" && lastChat.includes("L2 ($720)"), "최종 우승은 순자산 기준: " + lastChat);
   handleMessage(l1, { type: "again" });
   assert(L1.lnDebt === 0 && L1.money === START_MONEY, "새 게임이면 빚 탕감");
   delete process.env.GAME;

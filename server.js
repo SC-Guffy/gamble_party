@@ -23,6 +23,14 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
+// 좌상단 버전 표시: 커밋 해시(Render는 RENDER_GIT_COMMIT, 로컬은 git) + 서버가 켜진 시각(KST). index.html의 __VERSION__을 바꿔 끼운다
+const VERSION = (() => {
+  let h = process.env.RENDER_GIT_COMMIT;
+  if (!h) try { h = require("child_process").execSync("git rev-parse HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(); } catch (e) { h = "dev"; }
+  const t = new Date(Date.now() + 9 * 3600e3).toISOString().slice(5, 16).replace("T", " ");
+  return h.slice(0, 7) + " · " + t;
+})();
+
 function serveStatic(req, res) {
   let urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
   if (urlPath === "/") urlPath = "/index.html";
@@ -39,7 +47,7 @@ function serveStatic(req, res) {
       return;
     }
     res.writeHead(200, { "Content-Type": MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream" });
-    res.end(data);
+    res.end(filePath.endsWith("index.html") ? data.toString().replace("__VERSION__", VERSION) : data);
   });
 }
 

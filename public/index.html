@@ -425,7 +425,11 @@
       <div id="lobby-players"></div>
       <div class="eyebrow">진행 일수 · 방장이 정해요</div>
       <div id="days-pick"></div>
-      <p class="tagline" style="font-size:13px">친구는 방 목록에서 입장 · 시작은 👑 방장</p>
+      <p class="tagline" style="font-size:13px">친구는 방 목록에서 입장 · 시작은 👑 방장 · 혼자면 🤖 AI를 넣어요</p>
+      <div class="btn-row">
+        <button class="btn ghost" id="btn-bot">🤖 AI 추가</button>
+        <button class="btn ghost" id="btn-bot-out" hidden>AI 빼기</button>
+      </div>
       <div class="btn-row">
         <button class="btn" id="btn-start">시작하기</button>
         <button class="btn ghost" id="btn-leave">방 나가기</button>
@@ -1202,7 +1206,7 @@
   });
 
   function chipHTML(p, withReady, host){
-    return '<div class="pchip' + (p.id===myId?" me":"") + '"><img src="'+avatarURL(p.look)+'" alt=""><i style="background:' + PCOL[p.color] + '"></i>' + (host ? "👑" : "") + esc(p.name) +
+    return '<div class="pchip' + (p.id===myId?" me":"") + '"><img src="'+avatarURL(p.look)+'" alt=""><i style="background:' + PCOL[p.color] + '"></i>' + (host ? "👑" : "") + (p.bot ? "🤖" : "") + esc(p.name) +
       ' <span class="money">$' + p.money + '</span>' + (p.mining ? "⛏️" : withReady && p.ready ? '<span class="rdy">✔</span>' : "") + (p.begging ? "🥺" : "") + "</div>";
   }
   function renderRoomList(msg){
@@ -1221,6 +1225,11 @@
     $("days-pick").innerHTML = DAY_OPTS.map((n) => '<button data-n="'+n+'"'+(n === room.days ? ' class="on"' : "")+(host ? "" : " disabled")+">"+n+"일</button>").join("");
     $("btn-start").disabled = !host;
     $("btn-start").textContent = host ? room.days + "일 시작하기" : "방장 기다리는 중…";
+    const bots = room.players.filter((p) => p.bot).length; // AI 플레이어 (방장만 넣고 뺀다)
+    $("btn-bot").hidden = !host;
+    $("btn-bot").disabled = room.players.length >= 4;
+    $("btn-bot").textContent = room.players.length >= 4 ? "자리 없음" : "🤖 AI 추가";
+    $("btn-bot-out").hidden = !host || !bots;
   }
   function renderHud(){
     $("hud-round").textContent = room.phase === "final" ? "🏁 최종 결과" : (room.phase === "night" ? "🌙" : "☀️") + " DAY " + room.day + "/" + room.days + (room.phase === "night" ? " 정산" : room.bj ? " 블랙잭 " + room.bj.hand + "/" + room.bj.hands + "판" : room.dice ? " 주사위 " + room.dice.round + "/" + room.dice.rounds + "판" : room.pg ? " 펭귄 " + room.pg.round + "/" + room.pg.rounds + "판" : " 경마");
@@ -1790,6 +1799,8 @@
     sendMsg({type:"join", id:el.dataset.id, name:myName()});
   });
   $("btn-start").addEventListener("click", () => { ensureAudio(); sendMsg({type:"start"}); });
+  $("btn-bot").addEventListener("click", () => { sfxChip(); sendMsg({type:"addBot"}); });
+  $("btn-bot-out").addEventListener("click", () => { sfxChip(); sendMsg({type:"kickBot"}); });
   $("days-pick").addEventListener("click", (e) => { const b = e.target.closest("button"); if(b && !b.disabled){ sfxChip(); sendMsg({type:"days", n:Number(b.dataset.n)}); } });
   const leave = () => { sendMsg({type:"leave"}); room = null; setInRoom(false); show("home"); };
   $("btn-leave").addEventListener("click", leave);

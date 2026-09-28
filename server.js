@@ -1954,6 +1954,7 @@ function leaveRoom(ws) {
   if (!room) return;
   ws.room = null;
   room.players.delete(ws);
+  botDrop(room); // AI: 남은 게 봇뿐이면 봇도 내보낸다 → 자리가 다 비어 방이 사라진다
   if (room.players.size === 0) {
     clearTimeout(room.timer);
     rooms.delete(room.code);
@@ -2034,6 +2035,10 @@ function handleMessage(ws, msg) {
 
   if (msg.type === "start") {
     if (room.phase === "lobby" && me === hostOf(room)) startVote(room);
+  } else if (msg.type === "addBot") { // AI 플레이어: 대기실에서 방장만
+    if (room.phase === "lobby" && me === hostOf(room)) botAdd(room);
+  } else if (msg.type === "kickBot") {
+    if (room.phase === "lobby" && me === hostOf(room)) botKick(room);
   } else if (msg.type === "days") {
     if (room.phase !== "lobby" || me !== hostOf(room) || !Number.isInteger(msg.n) || msg.n < 1 || msg.n > MAX_DAYS) return;
     room.days = msg.n;
@@ -2135,6 +2140,165 @@ function handleMessage(ws, msg) {
   }
 }
 
+// ---------- AI 플레이어 (혼자도 할 수 있게) ----------
+// 봇 = 가짜 ws로 진짜 자리에 앉은 플레이어. 결정은 전부 handleMessage를 그대로 통과한다 → 돈·베팅·판정은 사람과 똑같이 서버가 소유한다.
+// BOT_TICK마다 지금 phase를 보고 할 일 하나를 한다. 새 게임을 붙일 땐 botBet에 한 줄(참가 방법) + botStep에 그 게임 phase 한 줄이면 된다.
+// 클라이언트 판정 게임(총알 피하기·박자 피하기)은 서버엔 탄막이 없으니 "이만큼 버티다 맞는다"를 미리 정하고 그 시각에 보고한다.
+// ponytail: 전략은 "적당히 무난하게" 수준의 난수다(카드 카운팅·입찰 추론·경매 힌트 활용 없음). 세게 만들 이유가 생기면 게임별로 손본다.
+const BOT_TICK = 400;
+const BOT_NAMES = ["봇철수", "봇영자", "봇만득", "봇덕배", "봇순이"];
+
+function botAdd(room) {
+  if (room.phase !== "lobby" || room.players.size >= MAX_PLAYERS) return;
+  const used = new Set([...room.players.values()].map((p) => p.name));
+  const ws = { id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, bot: true, botMem: {}, send() {} }; // readyState 0 = 아무 메시지도 안 받는다 (봇은 room을 직접 본다)
+  joinRoom(ws, room, BOT_NAMES.find((n) => !used.has(n)) || "봇");
+  room.players.get(ws).bot = true; // 화면에 🤖
+  ws.botTimer = setInterval(() => botStep(room, ws), BOT_TICK);
+  sys(room, "🤖 " + room.players.get(ws).name + " 입장 — AI가 대신 도박합니다");
+  broadcastRoom(room);
+}
+
+function botKick(room) { // 마지막에 넣은 봇 하나 빼기 (대기실에서만)
+  const ws = [...room.players.keys()].reverse().find((w) => w.bot);
+  if (!ws || room.phase !== "lobby") return;
+  clearInterval(ws.botTimer);
+  leaveRoom(ws);
+}
+
+function botDrop(room) { // 방에 사람이 하나도 없으면 봇만 남겨 둘 이유가 없다 (leaveRoom이 부른다 → 자리가 다 비면 방도 사라진다)
+  if (!room.players.size || [...room.players.values()].some((p) => !p.bot)) return;
+  for (const w of [...room.players.keys()]) { clearInterval(w.botTimer); leaveRoom(w); }
+}
+
+function botStep(room, ws) {
+  const p = room.players.get(ws), M = ws.botMem;
+  if (!p || rooms.get(room.code) !== room) return clearInterval(ws.botTimer);
+  const act = (m) => handleMessage(ws, m);
+  const g = GAMES.find((x) => x.key === room.game), sv = g && g.st ? room[g.st] : null;
+  const key = room.phase + ":" + room.day + ":" + (sv ? sv.round || sv.hand || 0 : 0) + (room.wg ? ":" + room.wg.turn : ""); // 판(룰렛은 차례)이 바뀌면 계획을 비운다
+  if (M.key !== key) { M.key = key; Object.assign(M, { n: 0, plan: null, did: false, at: 0, xy: null }); }
+  M.n++;
+  const wait = (a, b) => { M.at = M.at || Date.now() + rnd(a, b); if (Date.now() < M.at) return true; M.at = 0; return false; }; // 사람처럼 뜸 들이기 (한 번 지나면 다음 결정용으로 다시 잡는다)
+  if (p.mining) { for (let k = 0; k < 3; k++) act({ type: "mnHit" }); return; } // 탄광 가는 날은 하루 종일 곡괭이질
+  switch (room.phase) {
+    case "vote":
+      if (!M.did && !wait(500, 3000)) { M.did = true; act({ type: "vote", i: Math.floor(Math.random() * 4) }); } // 한 번만 (바꿔 누르면 표가 계속 흔들린다)
+      return;
+    case "betting": return botBet(room, p, act, M, wait);
+    case "night": return botNight(room, p, act, M, wait);
+    case "playing": { // 블랙잭 · 펭귄
+      if (room.bj && p.bj && p.bj.state === "playing" && !wait(700, 2200)) {
+        const t = bjTotal(p.bj.cards);
+        if (t >= 9 && t <= 11 && p.bj.cards.length === 2 && p.money >= p.bets[0] && Math.random() < 0.5) return void act({ type: "bj", a: "double" });
+        return void act({ type: "bj", a: t < 17 ? "hit" : "stand" }); // 17 미만이면 더 받는다 (기본 전략만)
+      }
+      if (room.pg && p.pg && p.pg.state === "playing" && !wait(500, 1600)) {
+        M.plan = M.plan || 1 + Math.floor(Math.random() * 4); // 몇 칸까지 가고 멈출지 미리 정해 둔다
+        return void act({ type: "pg", a: p.pg.step >= M.plan ? "stop" : "go" });
+      }
+      return;
+    }
+    case "ipDecide": { // 인디언 포커: 남의 카드는 다 보인다
+      const I = room.ip;
+      if (!I.ids.includes(p.id) || p.id in I.calls || wait(1500, 8000)) return;
+      const top = Math.max(...I.ids.filter((id) => id !== p.id).map((id) => I.cards[id]));
+      return void act({ type: "ipAct", a: top <= 5 || Math.random() < 0.3 ? "call" : "die" }); // 남들이 낮으면 콜, 아니면 가끔 블러핑
+    }
+    case "wgTurn": {
+      const W = room.wg;
+      if (W.order[W.turn] !== p.id || W.busy || W.settling || wait(1500, 6000)) return;
+      if (!W.passed[p.id] && WG_SLOTS - W.shot <= 3 && p.money >= Math.floor(room.cap / 2) && Math.random() < 0.6) return void act({ type: "wgAct", a: "pass" }); // 확률이 오르면 넘긴다
+      if (!W.doubled[p.id] && WG_SLOTS - W.shot >= 5 && Math.random() < 0.3) return void act({ type: "wgAct", a: "double" });
+      return void act({ type: "wgAct", a: "pull" });
+    }
+    case "duFire": { // 결투: rt는 서버가 잰 경과 시간 안에서만 인정된다 → 늦게 틱이 돌아도 이 반응 속도로 잘린다
+      const D = room.du;
+      if (!D.order.includes(p.id) || p.id in D.shots) return;
+      return void act({ type: "duShot", rt: Math.round(rnd(230, 600)) });
+    }
+    case "swRun": {
+      const S = room.sw;
+      if (!S.order.includes(p.id) || p.id in S.stops) return;
+      M.plan = M.plan || Math.max(0.3, S.target + rnd(-1, 1) * rnd(0.05, 0.9)); // 목표에서 조금 어긋난 체감
+      if ((Date.now() - S.t0) / 1000 >= M.plan) act({ type: "swStop", t: Math.round(M.plan * 100) / 100 });
+      return;
+    }
+    case "dgPlay": {
+      const D = room.dg, el = Date.now() - D.t0;
+      if (!D.order.includes(p.id) || p.id in D.dead) return;
+      M.plan = M.plan || Math.round(rnd(4000, DG_LEN)); // 이만큼 버티다 맞는 걸로 (탄막은 클라이언트가 돈다)
+      if (el >= M.plan) return void act({ type: "dgDie", t: M.plan });
+      if (el < 0) return;
+      M.xy = (M.xy || [DG_A / 2, DG_A / 2]).map((v) => Math.max(20, Math.min(DG_A - 20, v + rnd(-40, 40))));
+      return void act({ type: "dgPos", x: M.xy[0], y: M.xy[1] }); // 어슬렁어슬렁 (화면용)
+    }
+    case "rhPlay": {
+      const H = room.rh, el = Date.now() - H.t0;
+      if (!H.order.includes(p.id) || p.id in H.dead) return;
+      M.plan = M.plan || Math.round(rnd(3000, RH_CFG.len));
+      if (el >= M.plan) return void act({ type: "rhDie", t: M.plan });
+      if (el > 0 && Math.random() < 0.5) act({ type: "rhAct", a: Math.random() < 0.5 ? 0 : 1 }); // 점프·숙이기 시늉 (판정은 각자 화면)
+      return;
+    }
+    case "awPull":
+      if (room.aw.pair && room.aw.pair.includes(p.id)) for (let k = Math.round(rnd(2, 5)); k > 0; k--) act({ type: "awTap" }); // 초당 5~12연타
+      return;
+    case "cnMarket": {
+      const C = room.cn, price = C.prices[C.prices.length - 1];
+      if (!p.cn || M.n < 3) return;
+      M.plan = M.plan || { up: rnd(1.06, 1.5), dn: rnd(0.75, 0.95), late: C.ticks - Math.round(rnd(2, 20)) }; // 익절·손절 선과 늦어도 여기선 팔자
+      if (p.cn.cash > 0 && !M.did) { M.did = true; M.entry = price; return void act({ type: "cnAct", a: "buy" }); }
+      if (p.cn.coins > 0 && (price / M.entry > M.plan.up || price / M.entry < M.plan.dn || C.prices.length >= M.plan.late)) act({ type: "cnAct", a: "sell" });
+      return;
+    }
+  }
+}
+
+function botBet(room, p, act, M, wait) { // 베팅 단계: 한 박자 쉬고 걸고, 또 한 박자 쉬고 준비
+  if (p.ready || p.mining || wait(700, 3000)) return;
+  const amt = Math.max(1, Math.min(p.money, Math.round(room.cap * rnd(0.2, 0.8))));
+  if (M.did) return void act({ type: "ready", v: true });
+  M.did = true;
+  if (p.money <= 0) return;
+  switch (room.game) {
+    case "derby": return void act({ type: "bet", i: Math.floor(Math.random() * room.entrants.length), amount: amt });
+    case "dice": return void act({ type: "bet", i: Math.floor(Math.random() * 5), amount: amt }); // 홀·짝·다운·업·더블 중 하나 (단일 합은 너무 도박)
+    case "blackjack":
+      act({ type: "bet", i: 0, amount: amt });
+      if (Math.random() < 0.25) act({ type: "bet", i: 1, amount: Math.max(1, Math.round(amt * 0.2)) }); // 가끔 퍼펙트 페어
+      return;
+    case "plinko":
+      act({ type: "pkZone", v: Math.floor(Math.random() * 3) });
+      return void act({ type: "bet", i: 0, amount: amt });
+    case "nunchi": return void act({ type: "ncPick", n: 1 + Math.floor(Math.random() * 6) }); // 작은 수 쪽을 노린다
+    case "indian": return void act({ type: "ipJoin", v: true });
+    case "watergun": return void act({ type: "wgAct", a: "in" });
+    case "duel": return void act({ type: "duJoin", v: true });
+    case "stopwatch": return void act({ type: "swJoin", v: true });
+    case "dodge": return void act({ type: "dgJoin", v: true });
+    case "rhythm": return void act({ type: "rhJoin", v: true });
+    case "auction": return void act({ type: "auBid", v: Math.min(p.money, Math.max(1, Math.round(room.cap * AU_EV * rnd(0.5, 1.1)))) }); // 기대값 근처로 밀봉 입찰
+    case "armwrestle":
+      if (!room.aw.pair || !room.aw.pair.includes(p.id)) act({ type: "bet", i: Math.floor(Math.random() * 2), amount: amt }); // 선수면 베팅 못 한다
+      return;
+    default: return void act({ type: "bet", i: 0, amount: amt }); // 펭귄 · 코인
+  }
+}
+
+function botNight(room, p, act, M, wait) {
+  if (p.ready || wait(800, 3500)) return;
+  const T = trAmt(room);
+  if (p.money <= T) { // 상납금이 모자라다 → 구걸 한 번 해보고, 아무도 안 주면 사채로 메꾼다
+    if (!p.begged) return void act({ type: "beg", v: true });
+    if (p.begging && M.n < 25) return; // 적선해 줄까 ~10초 기다린다
+    if ((p.lnDebt || 0) + LN_UNIT <= LN_LIMIT) return void act({ type: "lnAct", a: "borrow" });
+  } else if (p.lnDebt && p.money > p.lnDebt + T + 200 && Math.random() < 0.5) {
+    act({ type: "lnAct", a: "repayAll" }); // 여유가 있으면 이자 붙기 전에 갚는다
+  }
+  act({ type: "ready", v: true });
+}
+
 // ---------- 재접속 ----------
 // 토큰 = 브라우저 localStorage에 둔 내 신분증(rcHello로 받는다). players는 통째로 브로드캐스트되니 player엔 절대 안 넣고 서버 전용 Map에만 둔다.
 // 끊기면(창 닫힘·폰 꺼짐·새로고침·핑 정리) 자리를 그대로 두고 p.rcAway = true(📴). 같은 토큰으로 rcHello 하면 그 자리에 다시 앉힌다.
@@ -2212,13 +2376,13 @@ function rcHostFix(room) {
 
 function rcCheckEmpty(room) {
   clearTimeout(room.rcEmpty);
-  if ([...room.players.values()].every((p) => p.rcAway)) room.rcEmpty = setTimeout(() => rcDrop(room), RC_EMPTY);
+  if ([...room.players.values()].every((p) => p.rcAway || p.bot)) room.rcEmpty = setTimeout(() => rcDrop(room), RC_EMPTY); // AI: 봇만 남아 있어도 빈 방이다
 }
 
 function rcDrop(room) {
-  if (rooms.get(room.code) !== room || [...room.players.values()].some((p) => !p.rcAway)) return; // 그새 누가 돌아왔거나 들어왔으면 그대로
+  if (rooms.get(room.code) !== room || [...room.players.values()].some((p) => !p.rcAway && !p.bot)) return; // 그새 누가 돌아왔거나 들어왔으면 그대로
   clearTimeout(room.timer);
-  for (const w of room.players.keys()) clearInterval(w.rcTimer);
+  for (const w of room.players.keys()) { clearInterval(w.rcTimer); clearInterval(w.botTimer); }
   for (const [t, e] of rcTokens) if (e.room === room) rcTokens.delete(t);
   rooms.delete(room.code);
   broadcastRoomList();
@@ -3377,6 +3541,38 @@ if (process.argv.includes("--check")) {
     handleMessage(t1, { type: "again" });
     assert(tr.phase === "lobby" && [T1, T2, T3, T4].every((p) => !p.ttTitles && JSON.stringify(p.ttStats) === JSON.stringify(ttNew())));
     delete process.env.GAME;
+  }
+  { // AI 플레이어: 15개 게임 전부 봇이 걸고 준비해서 낮이 넘어가는지 + 진행 단계에서 안 터지는지 + 밤(구걸 → 사채 → 준비)
+    const bfp = () => ({ id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} });
+    for (const G of GAMES) {
+      process.env.GAME = G.key;
+      const h = bfp();
+      handleMessage(h, { type: "create", name: "H" });
+      const br = h.room;
+      for (let k = 0; k < 3; k++) botAdd(br);
+      assert(br.players.size === MAX_PLAYERS && [...br.players.values()].filter((p) => p.bot).length === 3, "봇 3명이 안 앉았다");
+      handleMessage(h, { type: "start" }); // GAME 고정이라 투표 없이 바로 낮
+      assert(br.phase === "betting" && br.game === G.key);
+      const bots = [...br.players.keys()].filter((w) => w.bot);
+      const step = (n) => { for (let i = 0; i < n; i++) for (const w of bots) if (br.players.has(w)) { w.botMem.at = 1; botStep(br, w); } }; // at = 1 → 뜸 들이기를 건너뛴다
+      step(4); // 걸고 → 준비
+      assert([...br.players.values()].every((p) => !p.bot || p.ready), G.key + ": 봇이 준비를 안 했다");
+      assert([...br.players.values()].some((p) => p.bot && (Object.keys(p.bets).length || (br.au && br.au.bids[p.id]) || (br.aw && br.aw.pair && br.aw.pair.includes(p.id)))), G.key + ": 봇이 아무것도 안 걸었다"); // 팔씨름 선수는 참가비만 떼고 베팅은 못 한다
+      handleMessage(h, { type: "ready", v: true });
+      assert(br.phase !== "betting", G.key + ": 전원 준비인데 낮이 안 넘어갔다");
+      step(10); // 진행 단계(카드·점프·차례·연타·매매…)에서 터지지 않는지
+      clearTimeout(br.timer);
+      if (br.du && br.du.fakeTimers) br.du.fakeTimers.forEach(clearTimeout);
+      br.day = 10; br.phase = "night"; br.night = {}; // 상납금($300)보다 가진 돈이 적은 밤
+      for (const p of br.players.values()) Object.assign(p, { ready: false, money: 50, begged: false, begging: false, lnDebt: 0, mining: false, bets: {} });
+      step(40);
+      assert([...br.players.values()].every((p) => !p.bot || (p.begged && p.ready && p.money > trAmt(br))), G.key + ": 밤에 봇이 멈췄다");
+      for (const w of bots) clearInterval(w.botTimer);
+      clearTimeout(br.timer);
+      rooms.delete(br.code);
+    }
+    delete process.env.GAME;
+    console.log("AI 봇 " + GAMES.length + "개 게임 통과 (베팅·진행·밤)");
   }
   console.log("OK");
   process.exit(0);

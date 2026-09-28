@@ -397,7 +397,8 @@
 </style>
 </head>
 <body>
-<div id="ver">v __VERSION__</div>
+<div id="ver">v3 · __VERSION__</div>
+<script>{const e=document.getElementById("ver");if(e.textContent.includes("__VER"+"SION__"))e.textContent="v3";}</script>
 <div id="app">
 
   <canvas id="home-bg"></canvas>
@@ -996,7 +997,9 @@
   function connect(){
     connBanner.textContent = "서버에 연결하는 중...";
     connBanner.className = "conn-banner";
-    ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host);
+    // 프로토타입 사이트(workers.dev)에 정적으로 올라간 사본은 거기에 서버가 없으니 Render 서버로 붙는다. 로컬·LAN·Render는 그대로 같은 주소
+    const host = location.hostname.endsWith("workers.dev") ? "gamble-party.onrender.com" : location.host;
+    ws = new WebSocket((host === location.host && location.protocol !== "https:" ? "ws://" : "wss://") + host);
     ws.addEventListener("open", () => {
       connBanner.textContent = "서버 연결됨";
       connBanner.className = "conn-banner ok";

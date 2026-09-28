@@ -2133,6 +2133,10 @@ function handleMessage(ws, msg) {
     lnAct(room, me, msg.a);
   } else if (msg.type === "mnHit") {
     mnHit(ws, room, me);
+  } else if (msg.type === "disband") { // 방장이 언제든 판을 폭파 (게임 중에도)
+    if (me !== hostOf(room)) return;
+    broadcast(room, { type: "disbanded", by: me.name });
+    killRoom(room);
   } else if (msg.type === "leave") {
     rcLeave(ws, room, me);
     leaveRoom(ws);
@@ -2381,9 +2385,16 @@ function rcCheckEmpty(room) {
 
 function rcDrop(room) {
   if (rooms.get(room.code) !== room || [...room.players.values()].some((p) => !p.rcAway && !p.bot)) return; // 그새 누가 돌아왔거나 들어왔으면 그대로
+  killRoom(room);
+}
+
+// 방 폭파: 타이머·봇·토큰까지 통째로 치우고 남은 연결은 방 없는 상태로 (다시 방을 만들거나 들어갈 수 있게)
+function killRoom(room) {
   clearTimeout(room.timer);
-  for (const w of room.players.keys()) { clearInterval(w.rcTimer); clearInterval(w.botTimer); }
+  clearTimeout(room.rcEmpty);
+  for (const w of room.players.keys()) { clearInterval(w.rcTimer); clearInterval(w.botTimer); w.room = null; }
   for (const [t, e] of rcTokens) if (e.room === room) rcTokens.delete(t);
+  room.players.clear();
   rooms.delete(room.code);
   broadcastRoomList();
 }
@@ -3573,6 +3584,32 @@ if (process.argv.includes("--check")) {
     }
     delete process.env.GAME;
     console.log("AI 봇 " + GAMES.length + "개 게임 통과 (베팅·진행·밤)");
+  }
+  { // 게임 중 "나가기": 사람이 빠지면 봇만 남은 방은 통째로 사라진다 (강제 취소)
+    const q = { id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} };
+    handleMessage(q, { type: "create", name: "Q" });
+    const qr = q.room;
+    botAdd(qr);
+    handleMessage(q, { type: "start" });
+    assert(qr.phase === "vote" && qr.players.size === 2);
+    handleMessage(q, { type: "leave" });
+    assert(!rooms.has(qr.code) && qr.players.size === 0, "게임 중 나가기로 봇 방이 안 사라졌다");
+    console.log("게임 중 나가기 → 봇만 남은 방 정리 OK");
+  }
+  { // 방 폭파: 방장만, 게임 중에도 → 방이 사라지고 남은 사람도 방 없는 상태(다시 방을 만들 수 있다)
+    const h = { id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} }, g = { id: crypto.randomUUID(), room: null, readyState: 0, OPEN: 1, send() {} };
+    handleMessage(h, { type: "create", name: "H" });
+    handleMessage(g, { type: "join", id: h.room.code, name: "G" });
+    const kr = h.room;
+    handleMessage(h, { type: "start" });
+    handleMessage(g, { type: "disband" });
+    assert(rooms.get(kr.code) === kr, "방장 아닌 사람이 방을 폭파했다");
+    handleMessage(h, { type: "disband" });
+    assert(!rooms.has(kr.code) && !h.room && !g.room, "폭파 후에도 방이나 자리가 남아 있다");
+    handleMessage(g, { type: "create", name: "G" });
+    assert(g.room, "폭파 뒤에 새 방을 못 만든다");
+    killRoom(g.room);
+    console.log("방장 폭파 → 방 해산 OK");
   }
   console.log("OK");
   process.exit(0);
